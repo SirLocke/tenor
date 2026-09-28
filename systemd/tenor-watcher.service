@@ -9,8 +9,7 @@ Type=simple
 
 # Lokaler Benutzer, unter dem die Clips abgelegt werden.
 # Pfade mit %h = /home/<user>
-User=nils
-Group=nils
+# User=nils  # implizit bei --user Services
 WorkingDirectory=%h/video-cut
 
 # Venv-Interpreter: nutzt die gepinnten Pakete aus requirements.txt
@@ -39,6 +38,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
+# Zugriff auf NAS-Pfade (Ingest/Output/Music/Cache/State)
+ReadWritePaths=/srv/nas/Nils/video-cut
 ReadWritePaths=%h/video-cut/.cache
 
 # Ausgaben im Journal

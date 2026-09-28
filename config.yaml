@@ -131,9 +131,11 @@ watcher:
 #   scan_cmd: "occ files:scan nils --path=/data/nils/files/Reels"
 # =============================================================================
 nextcloud:
-  enabled: false
-  scan_cmd: 'docker exec nextcloud occ files:scan nils --path="Reels"'
-  timeout: 30
+  enabled: true
+  # Externer Speicher: /NAS-Nils gemountet unter /nas/Nils im Container
+  # Nextcloud-Pfad: /nils/files/NAS-Nils/video-cut/output
+  scan_cmd: 'docker exec nextcloud php /var/www/html/occ files:scan --path="/nils/files/NAS-Nils/video-cut/output"'
+  timeout: 60
 
 naming:
   # Dateiname innerhalb des Zielordners
