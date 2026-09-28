@@ -1,0 +1,54 @@
+# ---- Python ----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Secrets / lokale Overrides ----
+config.local.yaml
+.env
+*.secret
+
+# ---- Rohmaterial & Audio (nie committen) ----
+*.mov
+*.MOV
+*.mp4
+*.MP4
+*.m4v
+*.movi
+*.mp3
+*.MP3
+*.wav
+*.aac
+*.m4a
+
+# ---- Render-Artefakte & Output ----
+output/
+out/
+renders/
+.tmp/
+*.temp.mp4
+*.part
+.*.part
+*_partial.mp4
+cache/
+.cache/
+
+# ---- Systemd-Installationen ----
+*.service
+*.path
+!systemd/*.service
+!systemd/*.path
+
+# ---- Heruntergeladene Fonts ----
+assets/fonts/
+
+# ---- Notizen / Scratch ----
+plan.md.save
+datei.txt
+*.log

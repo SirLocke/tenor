@@ -1,0 +1,725 @@
+"""Schnitt, Beat-Matching, Dark-Film-Rendering und Export.
+
+CLI-Beispiel::
+
+    python -m src.pipeline -i /srv/nas/nils/videos -o /srv/nas/nils/videos/output -t "Madeira 2026"
+    python -m src.pipeline -i clip.MOV -o out/ -t "Madeira" -m song.mp3
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import math
+import subprocess
+import sys
+import time
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from . import (
+    ConfigError,
+    ensure_dir,
+    expand_path,
+    get,
+    load_config,
+    setup_logging,
+    slugify,
+)
+from .metadata import ClipInfo, Geocoder, collect_clips, dominant_place, primary_place
+from .styling import (
+    GradeConfig,
+    build_subtitle,
+    build_text_overlay,
+    center_crop_resize,
+    make_grader,
+    target_size,
+)
+
+log = logging.getLogger("tenor.pipeline")
+
+
+@dataclass
+class Segment:
+    """Ein geplanter Cut: Ausschnitt aus einer Rohdatei."""
+
+    clip: ClipInfo
+    start: float
+    end: float
+
+    @property
+    def duration(self) -> float:
+        return max(self.end - self.start, 0.0)
+
+
+@dataclass
+class RenderResult:
+    """Ergebnis eines Laufs."""
+
+    output: Path | None = None
+    cover: Path | None = None
+    segments: list[Segment] = field(default_factory=list)
+    title: str = ""
+    subtitle: str = ""
+    duration: float = 0.0
+    place: str | None = None
+    beat_source: str = "fallback"
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return self.output is not None and self.output.is_file()
+
+
+# --------------------------------------------------------------------------- #
+# Beat-Matching
+# --------------------------------------------------------------------------- #
+def detect_beat_durations(music: Path, cut_cfg: Mapping[str, Any]) -> list[float]:
+    """Beat-Tracking via librosa -> Liste von Cut-Längen in Sekunden.
+
+    Beats werden zu "Downbeats" gruppiert, sodass ein Schnitt zwischen
+    ``target_min`` und ``target_max`` liegt (Ziel: 1,4-2,0 s).
+    """
+    t_min = float(cut_cfg.get("target_min", 1.4))
+    t_max = float(cut_cfg.get("target_max", 2.0))
+    target = float(cut_cfg.get("target", (t_min + t_max) / 2))
+    target = min(max(target, t_min), t_max)
+
+    try:
+        import librosa
+    except ImportError:  # pragma: no cover
+        log.warning("librosa fehlt - es gilt das Fallback-Intervall")
+        return []
+
+    try:
+        y, sr = librosa.load(str(music), sr=22050, mono=True)
+        if y.size == 0:
+            raise ValueError("leere Audiodatei")
+        _tempo, frames = librosa.beat.beat_track(y=y, sr=sr)
+        times = librosa.frames_to_time(frames, sr=sr)
+    except Exception as exc:
+        log.warning("Beat-Tracking für %s fehlgeschlagen (%s) - Fallback greift", music.name, exc)
+        return []
+
+    beats = [0.0] + [float(t) for t in np.asarray(times).ravel() if math.isfinite(float(t))]
+    beats = sorted(set(round(b, 4) for b in beats if b >= 0.0))
+    if len(beats) < 3:
+        log.warning("Zu wenige Beats in %s (%d) - Fallback greift", music.name, len(beats))
+        return []
+
+    intervals = [b - a for a, b in zip(beats, beats[1:]) if b - a > 0.05]
+    if not intervals:
+        return []
+    median_beat = float(sorted(intervals)[len(intervals) // 2])
+    group = max(1, int(round(median_beat / target)))
+    log.info(
+        "Beat-Grid: Tempo ~%.0f BPM, Beat-Abstand %.2fs -> Gruppe %d (Cut ~%.2fs)",
+        60.0 / median_beat if median_beat else 0.0,
+        median_beat,
+        group,
+        median_beat * group,
+    )
+
+    grid = beats[::group]
+    durations: list[float] = []
+    for start, end in zip(grid, grid[1:]):
+        span = end - start
+        if span <= 0:
+            continue
+        durations.append(min(max(span, t_min), t_max))
+    if not durations:
+        durations = [min(max(median_beat * group, t_min), t_max)]
+    return durations
+
+
+def _iter_durations(durations: Sequence[float], fallback: float, limit: int = 0) -> Iterator[float]:
+    """Endloser Iterator über Cut-Längen (Beat-Grid, sonst fester Takt)."""
+    pool = list(durations) if durations else []
+    index = 0
+    produced = 0
+    while limit <= 0 or produced < limit:
+        yield pool[index % len(pool)] if pool else fallback
+        index += 1
+        produced += 1
+
+
+# --------------------------------------------------------------------------- #
+# Schnittplan
+# --------------------------------------------------------------------------- #
+def build_segments(
+    clips: Sequence[ClipInfo],
+    cut_cfg: Mapping[str, Any],
+    video_cfg: Mapping[str, Any],
+    *,
+    durations: Sequence[float] = (),
+    min_source_duration: float = 0.0,
+) -> list[Segment]:
+    """Erzeugt chronologisch geordnete Cuts aus den Rohclips.
+
+    Zu lange Rohclips werden zentriert gekürzt; ein Rest unterhalb der
+    minimalen Cutlänge wird verworfen (besser ein sauberer Beat-Cut als ein
+    0,3-Sekunden-Fetzen).
+    """
+    t_min = float(cut_cfg.get("target_min", 1.4))
+    fallback = float(cut_cfg.get("fallback_interval", 1.8))
+    max_cuts = int(cut_cfg.get("max_cuts", 0) or 0)
+    max_per_clip = int(cut_cfg.get("max_per_clip", 0) or 0)
+    max_total = float(get(video_cfg, "max_duration", 0) or 0)
+
+    segments: list[Segment] = []
+    total = 0.0
+    duration_iter = _iter_durations(durations, fallback, max_cuts)
+
+    for clip in clips:
+        source_duration = clip.duration
+        if source_duration <= 0.0:
+            log.warning("%s: keine Dauer ermittelbar - wird übersprungen", clip.name)
+            continue
+        if source_duration < min_source_duration or source_duration < t_min:
+            log.info(
+                "%s: nur %.2fs Material (<%.1fs) - übersprungen",
+                clip.name,
+                source_duration,
+                max(min_source_duration, t_min),
+            )
+            continue
+
+        cursor = 0.0
+        used_in_clip = 0.0
+        cuts_from_clip = 0
+        while True:
+            if max_cuts and len(segments) >= max_cuts:
+                break
+            if max_per_clip and cuts_from_clip >= max_per_clip:
+                break
+            if max_total and total >= max_total:
+                break
+
+            remaining = source_duration - cursor
+            if remaining < t_min:
+                break
+
+            want = next(duration_iter)
+            if max_total and total + want > max_total:
+                want = max_total - total
+                if want < t_min:
+                    break
+
+            take = min(want, remaining)
+            # Zentriert kürzen: subclip(mid - dur/2, mid + dur/2)
+            mid = cursor + remaining / 2.0
+            start = max(mid - take / 2.0, 0.0)
+            end = min(start + take, source_duration)
+            if end - start < t_min - 1e-3:
+                break
+
+            segments.append(Segment(clip=clip, start=round(start, 3), end=round(end, 3)))
+            total += end - start
+            used_in_clip += end - start
+            cursor = end
+            cuts_from_clip += 1
+
+        log.info(
+            "%s: %d Cuts, %.1fs von %.1fs Material genutzt",
+            clip.name,
+            cuts_from_clip,
+            used_in_clip,
+            source_duration,
+        )
+
+    return segments
+
+
+# --------------------------------------------------------------------------- #
+# Rendering
+# --------------------------------------------------------------------------- #
+def _open_source(path: Path) -> Any:
+    """Öffnet eine Videoquelle; beschädigte Dateien werfen eine lesbare Exception."""
+    from moviepy import VideoFileClip
+
+    clip = VideoFileClip(str(path), audio=False)
+    if clip.size is None or clip.size[0] < 2 or clip.size[1] < 2:
+        raise ValueError(f"ungültige Bildgröße {clip.size}")
+    return clip
+
+
+def build_segment_clip(
+    segment: Segment,
+    cfg: Mapping[str, Any],
+    grade: GradeConfig,
+    overlay_png: Any,
+    *,
+    fps: int,
+    width: int,
+    height: int,
+    sources: list[Any] | None = None,
+) -> Any:
+    """Rendert einen Cut: Crop -> Grading -> Text-Overlay.
+
+    ``sources`` sammelt die geöffneten Quell-Clips. moviepy liest Frames
+    verzögert, die Reader dürfen erst nach ``write_videofile`` geschlossen
+    werden - deshalb wird hier *nicht* geschlossen.
+    """
+    from moviepy import CompositeVideoClip, ImageClip
+
+    source = _open_source(segment.clip.path)
+    if sources is not None:
+        sources.append(source)
+
+    source_duration = float(source.duration or 0.0)
+    start = max(min(segment.start, max(source_duration - 0.05, 0.0)), 0.0)
+    end = max(min(segment.end, source_duration), start + 1.0 / fps)
+    piece = source.subclipped(start, end)
+    piece = piece.with_duration(max(end - start, 1.0 / fps))
+
+    piece = center_crop_resize(piece, width, height)
+    piece = piece.with_fps(fps)
+    piece = piece.image_transform(make_grader(grade))
+
+    if overlay_png is not None:
+        text = ImageClip(overlay_png, duration=piece.duration)
+        piece = CompositeVideoClip([piece, text], size=(width, height))
+    return piece.with_fps(fps)
+
+
+def render_segments(
+    segments: Sequence[Segment],
+    cfg: Mapping[str, Any],
+    *,
+    grade: GradeConfig,
+    overlay_png: Any,
+    on_error: list[str] | None = None,
+) -> list[Any]:
+    """Rendert alle Cuts. Fehlerhafte Clips werden übersprungen, nicht abgebrochen."""
+    from moviepy import concatenate_videoclips
+
+    video_cfg = get(cfg, "video", {}) or {}
+    fps = int(video_cfg.get("fps", 30))
+    width, height = target_size(cfg)
+    failures = on_error if on_error is not None else []
+    rendered: list[Any] = []
+    sources: list[Any] = []
+
+    for index, segment in enumerate(segments, start=1):
+        try:
+            clip = build_segment_clip(
+                segment,
+                cfg,
+                grade,
+                overlay_png,
+                fps=fps,
+                width=width,
+                height=height,
+                sources=sources,
+            )
+            rendered.append(clip)
+            log.info(
+                "Cut %d/%d: %s %.2f-%.2fs (%.2fs)",
+                index,
+                len(segments),
+                segment.clip.name,
+                segment.start,
+                segment.end,
+                segment.duration,
+            )
+        except Exception as exc:
+            message = f"Cut {index} aus {segment.clip.name} fehlgeschlagen: {exc}"
+            log.error("%s", message)
+            failures.append(message)
+            _close_all(sources)
+            sources = []
+            if rendered:
+                _close_all(rendered)
+                rendered = []
+
+    if not rendered:
+        _close_all(sources)
+        return []
+
+    final = concatenate_videoclips(rendered, method="chain")
+    try:
+        final = final.without_audio()
+    except Exception:  # pragma: no cover
+        pass
+    # Quell-Reader leben bis nach write_videofile weiter
+    final.tenor_sources = sources  # type: ignore[attr-defined]
+    return [final]
+
+
+def _close_all(clips: Sequence[Any]) -> None:
+    """Schließt Clips und ignoriert Fehler (z. B. bereits geschlossene Reader)."""
+    for clip in clips:
+        try:
+            clip.close()
+        except Exception:  # pragma: no cover
+            pass
+
+
+def make_overlay_array(cfg: Mapping[str, Any], title: str, subtitle: str) -> np.ndarray:
+    """Text-Overlay als RGBA-Numpy-Array für ``ImageClip``."""
+    width, height = target_size(cfg)
+    image = build_text_overlay(cfg, title=title, subtitle=subtitle, width=width, height=height)
+    if image.mode != "RGBA":
+        image = image.convert("RGBA")
+    return np.asarray(image, dtype=np.uint8)
+
+
+# --------------------------------------------------------------------------- #
+# Cover
+# --------------------------------------------------------------------------- #
+def write_cover(
+    video: Path,
+    cover: Path,
+    *,
+    at: float = 0.5,
+    width: int = 1080,
+    height: int = 1920,
+) -> Path | None:
+    """Erzeugt ein 1080x1920 Cover-Frame bei Sekunde ``at`` (via ffmpeg)."""
+    cmd = [
+        "ffmpeg", "-y", "-v", "error",
+        "-ss", f"{max(at, 0.0):.3f}",
+        "-i", str(video),
+        "-frames:v", "1",
+        "-vf", f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}",
+        "-q:v", "2",
+        str(cover),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=120, check=False)
+    except FileNotFoundError:
+        log.error("ffmpeg nicht gefunden - kein Cover erzeugt")
+        return None
+    except subprocess.TimeoutExpired:
+        log.error("ffmpeg-Timeout beim Cover von %s", video.name)
+        return None
+    if proc.returncode != 0 or not cover.is_file():
+        log.error(
+            "Cover konnte nicht erzeugt werden (%s): %s",
+            video.name,
+            proc.stderr.decode("utf-8", "replace").strip()[:300],
+        )
+        return None
+    log.info("Cover: %s", cover)
+    return cover
+
+
+# --------------------------------------------------------------------------- #
+# Naming
+# --------------------------------------------------------------------------- #
+def build_output_name(cfg: Mapping[str, Any], title: str, when: float) -> str:
+    naming = get(cfg, "naming", {}) or {}
+    template = str(naming.get("template", "{date}_{slug}_{time}"))
+    stamp = time.localtime(when)
+    values = {
+        "date": time.strftime("%Y-%m-%d", stamp),
+        "time": time.strftime("%H%M%S", stamp),
+        "slug": slugify(title),
+        "title": slugify(title, max_length=80),
+    }
+    try:
+        name = template.format(**values)
+    except KeyError as exc:
+        log.warning("Unbekannter Platzhalter %s in naming.template - Fallback", exc)
+        name = f"{values['date']}_{values['slug']}_{values['time']}"
+    return name
+
+
+def unique_path(directory: Path, stem: str, suffix: str) -> Path:
+    """Vergibt ``stem``, ``stem_2``, ... falls der Name schon existiert."""
+    candidate = directory / f"{stem}{suffix}"
+    counter = 2
+    while candidate.exists():
+        candidate = directory / f"{stem}_{counter}{suffix}"
+        counter += 1
+    return candidate
+
+
+# --------------------------------------------------------------------------- #
+# Orchestrierung
+# --------------------------------------------------------------------------- #
+def _pick_music(music: str | Path | None, cfg: Mapping[str, Any]) -> Path | None:
+    if music:
+        path = Path(str(music)).expanduser()
+        return path if path.is_file() else None
+    music_dir = get(cfg, "music_dir")
+    if not music_dir:
+        return None
+    directory = expand_path(music_dir)
+    if not directory.is_dir():
+        return None
+    candidates = sorted(
+        (p for p in directory.iterdir() if p.suffix.lower() == ".mp3" and p.is_file()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def run(
+    sources: Sequence[str | Path],
+    *,
+    config_path: str | None = None,
+    output_dir: str | Path | None = None,
+    title: str | None = None,
+    music: str | Path | None = None,
+    no_cover: bool = False,
+    no_geocoding: bool = False,
+    limit: int = 0,
+    dry_run: bool = False,
+    delete_after: bool = False,
+) -> RenderResult:
+    """Kompletter Pipeline-Lauf: Metadaten -> Schnitt -> Render -> Export."""
+    cfg = load_config(config_path)
+    video_cfg = get(cfg, "video", {}) or {}
+    cut_cfg = get(cfg, "cut", {}) or {}
+
+    result = RenderResult()
+    if not sources:
+        sources = [str(expand_path(get(cfg, "ingest_dir", ".")))]
+
+    if no_geocoding:
+        cfg.setdefault("geocoding", {})
+        cfg["geocoding"]["enabled"] = False
+    geocoder = Geocoder(cfg)
+
+    clips = collect_clips(
+        sources,
+        geocoder=geocoder,
+        recursive=bool(get(cfg, "watcher.recursive", False)),
+    )
+    geocoder.save_cache()
+
+    if limit > 0:
+        clips = clips[:limit]
+    if not clips:
+        log.error("Keine verwertbaren Eingabedateien gefunden: %s", ", ".join(str(s) for s in sources))
+        return result
+
+    min_source = float(get(cfg, "watcher.min_clip_duration", 0.0) or 0.0)
+    usable = [c for c in clips if c.duration >= min_source]
+    skipped = len(clips) - len(usable)
+    if skipped:
+        log.info("%d Datei(en) kürzer als %.1fs - übersprungen", skipped, min_source)
+    if not usable:
+        log.error("Alle Eingaben sind kürzer als %.1fs", min_source)
+        return result
+
+    place = dominant_place(usable)
+    result.place = place
+    reference = usable[0]
+    # Ohne expliziten Titel: Ortsname ( Kurzform ), sonst Datum, sonst "Tenor".
+    effective_title = title or primary_place(place) or reference.date_label or "Tenor"
+    subtitle = build_subtitle(place, reference.date_label)
+    result.title = effective_title
+    result.subtitle = subtitle
+
+    music_path = _pick_music(music, cfg)
+    durations: list[float] = []
+    if music_path is not None:
+        durations = detect_beat_durations(music_path, cut_cfg)
+        result.beat_source = f"beats:{music_path.name}" if durations else "fallback"
+    else:
+        log.info("Keine Musik gefunden - fester Takt von %.1fs", float(cut_cfg.get("fallback_interval", 1.8)))
+
+    segments = build_segments(
+        usable,
+        cut_cfg,
+        video_cfg,
+        durations=durations,
+        min_source_duration=min_source,
+    )
+    result.segments = segments
+    result.duration = sum(s.duration for s in segments)
+    if not segments:
+        log.error("Kein einziger Cut zustande gekommen - Export abgebrochen")
+        return result
+
+    log.info(
+        "Schnittplan: %d Cuts, %.1fs, Titel=%r, Unterzeile=%r, Beat-Quelle=%s",
+        len(segments),
+        result.duration,
+        effective_title,
+        subtitle,
+        result.beat_source,
+    )
+
+    if dry_run:
+        for segment in segments:
+            log.info(
+                "PLAN %s %.2f-%.2fs (%.2fs)",
+                segment.clip.name,
+                segment.start,
+                segment.end,
+                segment.duration,
+            )
+        return result
+
+    out_dir = ensure_dir(expand_path(output_dir or get(cfg, "output_dir", "output")))
+    stem = build_output_name(cfg, effective_title, time.time())
+    suffix = str(get(cfg, "naming.extension", ".mp4") or ".mp4")
+    target = unique_path(out_dir, stem, suffix)
+    partial = target.parent / f"{target.stem}.part.mp4"
+    partial.unlink(missing_ok=True)
+
+    grade = GradeConfig.from_config(cfg)
+    try:
+        overlay = make_overlay_array(cfg, effective_title, subtitle)
+    except Exception as exc:
+        log.error("Text-Overlay konnte nicht gerendert werden (%s) - exportiere ohne Text", exc)
+        result.errors.append(f"overlay: {exc}")
+        overlay = None
+
+    errors: list[str] = []
+    rendered = render_segments(
+        segments,
+        cfg,
+        grade=grade,
+        overlay_png=overlay,
+        on_error=errors,
+    )
+    result.errors.extend(errors)
+
+    if not rendered:
+        log.error("Kein Cut konnte gerendert werden - Abbruch ohne Export")
+        return result
+
+    final = rendered[0]
+    ffmpeg_params = ["-pix_fmt", str(video_cfg.get("pixel_format", "yuv420p"))]
+    crf = video_cfg.get("crf")
+    if crf is not None:
+        ffmpeg_params += ["-crf", str(crf)]
+    if bool(video_cfg.get("faststart", True)):
+        ffmpeg_params += ["-movflags", "+faststart"]
+    if bool(get(cfg, "video.threads", 0) or 0):
+        ffmpeg_params += ["-threads", str(int(get(cfg, "video.threads", 0)))]
+
+    try:
+        final.write_videofile(
+            str(partial),
+            fps=int(video_cfg.get("fps", 30)),
+            codec=str(video_cfg.get("codec", "libx264")),
+            audio=bool(video_cfg.get("audio", False)),
+            preset=str(video_cfg.get("preset", "medium")),
+            threads=int(video_cfg.get("threads", 0) or 0) or None,
+            ffmpeg_params=ffmpeg_params,
+            logger=None,
+        )
+    except Exception as exc:
+        log.exception("Export nach %s fehlgeschlagen: %s", partial, exc)
+        result.errors.append(f"export: {exc}")
+        partial.unlink(missing_ok=True)
+        return result
+    finally:
+        _close_all([final])
+        _close_all(getattr(final, "tenor_sources", []) or [])
+
+    partial.replace(target)
+    result.output = target
+    log.info("Export fertig: %s (%.1fs Video)", target, result.duration)
+
+    if not no_cover and bool(video_cfg.get("cover", True)):
+        cover_path = target.with_suffix(".jpg")
+        result.cover = write_cover(
+            target,
+            cover_path,
+            at=float(video_cfg.get("cover_at", 0.5)),
+            width=target_size(cfg)[0],
+            height=target_size(cfg)[1],
+        )
+
+    if delete_after:
+        for clip in dict.fromkeys(segment.clip.path for segment in segments):
+            try:
+                clip.unlink()
+                log.info("Rohclip gelöscht: %s", clip.name)
+            except OSError as exc:
+                log.warning("Rohclip nicht löschbar (%s): %s", clip.name, exc)
+
+    return result
+
+
+# --------------------------------------------------------------------------- #
+# CLI
+# --------------------------------------------------------------------------- #
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m src.pipeline",
+        description="Rohclips chronologisch schneiden, dark-film graden und als 9:16-Reel exportieren.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("-i", "--input", nargs="+", help="Eingangsdatei(en) oder -ordner")
+    parser.add_argument("-o", "--output", help="Ausgabeordner (Default: output_dir aus config.yaml)")
+    parser.add_argument("-t", "--title", help="Titelzeile des Overlays, z. B. 'Madeira 2026'")
+    parser.add_argument("-m", "--music", help="MP3 für Beat-Matching")
+    parser.add_argument("-c", "--config", help="Pfad zur config.yaml")
+    parser.add_argument("--no-cover", action="store_true", help="kein Cover-Thumbnail erzeugen")
+    parser.add_argument("--no-geo", action="store_true", help="Reverse-Geocoding überspringen")
+    parser.add_argument("--limit", type=int, default=0, help="max. Anzahl Eingabedateien (0 = alle)")
+    parser.add_argument("--dry-run", action="store_true", help="nur Schnittplan ausgeben, kein Export")
+    parser.add_argument("--delete-after", action="store_true", help="Rohclips nach Export löschen")
+    parser.add_argument("--json", action="store_true", help="Ergebnis als JSON auf stdout")
+    parser.add_argument("-q", "--quiet", action="store_true", help="nur Warnungen und Fehler loggen")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as exc:
+        print(f"Konfigurationsfehler: {exc}", file=sys.stderr)
+        return 2
+    setup_logging(cfg, quiet=args.quiet)
+
+    if not args.input:
+        ingest = expand_path(get(cfg, "ingest_dir", "."))
+        if not ingest.is_dir():
+            log.error("Kein -i angegeben und ingest_dir %s existiert nicht", ingest)
+            return 2
+        args.input = [str(ingest)]
+
+    result = run(
+        args.input,
+        config_path=args.config,
+        output_dir=args.output,
+        title=args.title,
+        music=args.music,
+        no_cover=args.no_cover,
+        no_geocoding=args.no_geo,
+        limit=args.limit,
+        dry_run=args.dry_run,
+        delete_after=args.delete_after,
+    )
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "output": str(result.output) if result.output else None,
+                    "cover": str(result.cover) if result.cover else None,
+                    "cuts": len(result.segments),
+                    "duration": round(result.duration, 2),
+                    "title": result.title,
+                    "subtitle": result.subtitle,
+                    "place": result.place,
+                    "beat_source": result.beat_source,
+                    "errors": result.errors,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
+    if not result.output and not args.dry_run:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

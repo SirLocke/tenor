@@ -1,0 +1,50 @@
+[Unit]
+Description=tenor - Ingest-Watcher für die Video-Automatisierungspipeline
+Documentation=https://github.com/SirLocke/tenor
+After=network-online.target remote-fs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Lokaler Benutzer, unter dem die Clips abgelegt werden.
+# Pfade mit %h = /home/<user>
+User=nils
+Group=nils
+WorkingDirectory=%h/video-cut
+
+# Venv-Interpreter: nutzt die gepinnten Pakete aus requirements.txt
+ExecStart=%h/video-cut/.venv/bin/python -m src.watcher --config %h/video-cut/config.yaml
+
+# Ingest-Watcher beendet sich bei SIGTERM sauber (flushed den State).
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Neustartverhalten
+Restart=on-failure
+RestartSec=10
+
+# Umgebung
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONFAULTHANDLER=1
+
+# Der Rendervorgang ist CPU-, nicht I/O-lastig: etwas zurückhaltend einplanen,
+# damit der Server responsiv bleibt.
+Nice=10
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+
+# Härtung
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=%h/video-cut/.cache
+
+# Ausgaben im Journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tenor-watcher
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,129 @@
+# =============================================================================
+# tenor - Konfiguration
+# Alle Pfade dürfen relative Pfade, ~ oder ${VARIABLE} enthalten.
+# Überschreibbar per CLI (-c/--config) oder Env (TENOR_*).
+# =============================================================================
+
+# Ingest: Hier landen die Rohclips (iPhone MOV/MP4). Wird vom Watcher überwacht.
+ingest_dir: /srv/nas/nils/videos
+# Export: fertige Reels/Shorts + Cover-Thumbnails.
+output_dir: /srv/nas/nils/videos/output
+# Musik: optionale MP3 für Beat-Matching.
+music_dir: /srv/nas/nils/music
+
+# Als Rohmaterial akzeptierte Endungen (case-insensitiv geprüft).
+extensions:
+  - .mov
+  - .mp4
+  - .m4v
+
+# =============================================================================
+# Video-Export
+# =============================================================================
+video:
+  width: 1080          # 9:16
+  height: 1920
+  fps: 30
+  codec: libx264
+  crf: 19              # 18 = visuell verlustfrei, 23 = klein. 19 = sweet spot
+  preset: medium       # ultrafast..veryslow
+  pixel_format: yuv420p
+  audio: false         # Reels werden stumm exportiert
+  faststart: true      # -movflags +faststart
+  max_duration: 0      # Reel hart auf X Sekunden kürzen (0 = unlimited)
+  cover: true          # 1080x1920 Thumbnail erzeugen
+  cover_at: 0.5        # Zeitpunkt des Cover-Frames in Sekunden
+  threads: 0           # 0 = ffmpeg entscheidet selbst
+
+# =============================================================================
+# Schnitt / Beat-Matching
+# =============================================================================
+cut:
+  target_min: 1.4      # kürzester Cut (Sekunden)
+  target_max: 2.0      # längster Cut (Sekunden)
+  target: 1.7          # Wunsch-Cutlänge, bestimmt Beat-Gruppierung
+  fallback_interval: 1.8   # ohne Musik / bei Beat-Fehler
+  max_cuts: 0          # 0 = unlimited, sonst harte Obergrenze pro Reel
+  max_per_clip: 0      # 0 = unlimited, sonst max. Cuts aus derselben Datei
+
+# =============================================================================
+# Dark-Film Grading ("Moody Cinematic Look")
+# =============================================================================
+style:
+  gamma: 0.93              # < 1 => leicht unterbelichtet
+  contrast: 0.22           # Blende der S-Kurve
+  black_lift: 0.035        # Matte Black Toe: angehobener, matter Schwarzpunkt
+  black_toe: 2.2           # Form des Auslaufs (höher = weicher)
+  highlight_ceiling: 0.94  # digitale Ausbrenner im Himmel vermeiden
+  saturation: 0.90         # global leicht entsättigt
+  shadow_desaturate: 0.18  # Schatten zusätzlich entsättigen
+  teal_red: -0.006         # Cine-Teal in den Schatten:
+  teal_green: 0.012        #   Rot raus, Grün/Blau rein
+  teal_blue: 0.026
+  highlight_cool: 0.010    # Highlights leicht kühlen
+  skin_damp: 0.008         # Haut-/Erdtöne in den Mitteltönen dezent dämpfen
+  text:
+    anchor_x: 900          # 1080 - 180 => rechter Ankerpunkt (Safe Zone)
+    y_title: 1445          # Textgruppe zwischen 1440 und 1540 px
+    max_width: 780         # Textbreite links vom Ankerpunkt
+    title_size: 36         # Roboto-Bold, Versalien
+    subtitle_size: 24      # Roboto-Regular/Mono, #D0D5DD
+    title_tracking: 3      # Letter-Spacing in px
+    subtitle_tracking: 1
+    line_gap: 16
+    title_color: "#FFFFFF"
+    subtitle_color: "#D0D5DD"
+    uppercase_title: true
+    safe_bottom: 1540      # Textgruppe wandert nach oben, wenn sie überragt
+    shadow_offset: [2, 2]
+    shadow_blur: 4
+    shadow_alpha: 0.7      # 70% Deckkraft des Drop-Shadows
+
+# =============================================================================
+# Fonts (Roboto bevorzugt, Fallback auf Systemfonts)
+# =============================================================================
+fonts:
+  bold: assets/fonts/Roboto-Bold.ttf
+  regular: assets/fonts/Roboto-Regular.ttf
+  mono: assets/fonts/RobotoMono-Regular.ttf
+  auto_download: true      # fehlen die TTFs, einmalig nach assets/fonts holen
+  system_fallbacks:
+    - /usr/share/fonts/truetype/roboto/unhinted/Roboto-Bold.ttf
+    - /usr/share/fonts/truetype/lato/Lato-Bold.ttf
+    - /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
+    - /usr/share/fonts/truetype/noto/NotoSans-Bold.ttf
+    - /usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf
+
+# =============================================================================
+# Metadaten / Geocoding
+# =============================================================================
+geocoding:
+  enabled: true
+  timeout: 5               # Sekunden (Plan-Vorgabe)
+  zoom: 10
+  language: de
+  user_agent: "tenor/1.0 (self-hosted video pipeline; +https://github.com/SirLocke/tenor)"
+  cache_file: .cache/geocoding.json
+  cache_precision: 3       # Nachkommastellen für Cache-Key (~$100m)
+
+# =============================================================================
+# Watcher
+# =============================================================================
+watcher:
+  debounce_seconds: 5      # Dateigröße muss so lange stabil sein
+  batch_window: 12         # nach dem ersten Clip X Sekunden weiter sammeln
+  recursive: false
+  process_existing_on_start: true   # beim Start bereits liegende Clips einlesen
+  delete_after: false      # Rohclips nach erfolgreichem Export löschen
+  min_clip_duration: 0.6   # kürzere Dateien überspringen
+
+# =============================================================================
+# Naming & Logging
+# =============================================================================
+naming:
+  template: "{date}_{slug}_{time}"   # date=JJJJ-MM-TT, slug=Titel, time=HHMMSS
+  extension: .mp4
+
+logging:
+  level: INFO
+  file: .cache/tenor.log

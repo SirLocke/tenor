@@ -1,0 +1,18 @@
+[Unit]
+Description=tenor - startet den Ingest-Watcher, wenn sich der Videoordner ändert
+Documentation=https://github.com/SirLocke/tenor
+# Der .path-Unit startet tenor-watcher.service einmalig. Wegen
+# "Restart=on-failure" beendet sich der Service nach erfolgreichem Lauf selbst
+# (er läuft mit --once). Für den Dauerbetrieb stattdessen den Service direkt
+# aktivieren:  sudo systemctl enable --now tenor-watcher.service
+
+[Path]
+# Verzeichnis, das der Watcher überwacht. PathModified feuert, sobald sich
+# Änderungszeit *oder* Inhalt des Ordners ändern (auch bei neuen Unterordnern).
+PathModified=/srv/nas/nils/videos
+# DirectoryNotEmpty feuert nur, wenn Dateien vorhanden sind:
+# DirectoryNotEmpty=/srv/nas/nils/videos
+Unit=tenor-watcher.service
+
+[Install]
+WantedBy=paths.target
