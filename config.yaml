@@ -123,8 +123,18 @@ watcher:
   min_clip_duration: 0.6   # kürzere Dateien überspringen
 
 # =============================================================================
-# Naming & Logging
+# Nextcloud Auto-Scan (optional)
+# Nach jedem Export: Nextcloud dazu bringen, neue Dateien zu indizieren.
+# Standard: deaktiviert. Für Docker:
+#   scan_cmd: "docker exec nextcloud occ files:scan nils --path=/Reels"
+# Für lokale Instanz:
+#   scan_cmd: "occ files:scan nils --path=/data/nils/files/Reels"
 # =============================================================================
+nextcloud:
+  enabled: false
+  scan_cmd: 'docker exec nextcloud occ files:scan nils --path="Reels"'
+  timeout: 30
+
 naming:
   # Dateiname innerhalb des Zielordners
   template: "{date}_{slug}_{time}"   # date=JJJJ-MM-TT, slug=Titel, time=HHMMSS

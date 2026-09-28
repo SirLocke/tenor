@@ -865,7 +865,37 @@ def export_reel(
             height=target_size(cfg)[1],
         )
 
+    # Optional: Nextcloud-Scan nach Export (indiziert neue Dateien)
+    if not dry_run:
+        scan_nextcloud(cfg, out_dir)
+
     return target
+
+
+def scan_nextcloud(cfg: Mapping[str, Any], output_dir: Path) -> None:
+    """Führt den konfigurierten Nextcloud-Scan-Befehl aus."""
+    nc_cfg = get(cfg, "nextcloud", {}) or {}
+    if not nc_cfg.get("enabled", False):
+        return
+    cmd_template = nc_cfg.get("scan_cmd")
+    if not cmd_template:
+        return
+    # Platzhalter {output_dir} ersetzen
+    cmd = cmd_template.format(output_dir=output_dir)
+    timeout = int(nc_cfg.get("timeout", 30) or 0)
+    log.info("Nextcloud-Scan: %s", cmd)
+    try:
+        subprocess.run(
+            cmd,
+            shell=True,
+            timeout=timeout,
+            check=False,
+            capture_output=True,
+        )
+    except subprocess.TimeoutExpired:
+        log.warning("Nextcloud-Scan Timeout nach %ss", timeout)
+    except Exception as exc:  # pragma: no cover
+        log.warning("Nextcloud-Scan fehlgeschlagen: %s", exc)
 
 
 # --------------------------------------------------------------------------- #
