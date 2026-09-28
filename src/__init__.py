@@ -121,6 +121,7 @@ DEFAULTS: dict[str, Any] = {
         "debounce_seconds": 5,
         "batch_window": 12,
         "recursive": True,
+        "ignore_dirs": ["imgest"],
         "process_existing_on_start": True,
         "delete_after": False,
         "min_clip_duration": 0.6,
@@ -346,16 +347,24 @@ def iter_media_files(
     extensions: Iterable[str],
     *,
     recursive: bool = False,
+    ignore_dirs: Iterable[str] = (),
 ) -> list[Path]:
-    """Listet Mediendateien in ``directory`` (sortiert, Temp-Dateien ausgeschlossen)."""
+    """Listet Mediendateien in ``directory`` (sortiert, Temp-Dateien ausgeschlossen).
+
+    ``ignore_dirs``: Verzeichnisnamen, die komplett ignoriert werden (z. B. ``["imgest"]``).
+    """
     base = Path(directory).expanduser()
     if not base.is_dir():
         return []
     wanted = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in extensions}
+    ignore = {d.lower() for d in ignore_dirs}
     pattern = "**/*" if recursive else "*"
     found: list[Path] = []
     for path in base.glob(pattern):
         if not path.is_file() or path.suffix.lower() not in wanted:
+            continue
+        # Ignorierte Ordner in der Pfadstruktur prüfen
+        if any(part.lower() in ignore for part in path.parts):
             continue
         name = path.name
         if name.startswith(".") or name.endswith((".part", ".tmp", ".crdownload", "~")):

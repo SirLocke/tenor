@@ -118,6 +118,8 @@ watcher:
   # true = Ingest-Unterordner mitüberwachen. Der Ordnername wird dann als
   # Tripname für den Output verwendet (ingest/Madeira 2026/ -> output/Madeira 2026/).
   recursive: true
+  # Verzeichnisnamen, die komplett ignoriert werden (nicht durchlaufen)
+  ignore_dirs: ["imgest"]
   process_existing_on_start: true   # beim Start bereits liegende Clips einlesen
   delete_after: false      # Rohclips nach erfolgreichem Export löschen
   min_clip_duration: 0.6   # kürzere Dateien überspringen

@@ -242,8 +242,43 @@ def build_segments(
 # Rendering
 # --------------------------------------------------------------------------- #
 def _open_source(path: Path) -> Any:
-    """Öffnet eine Videoquelle; beschädigte Dateien werfen eine lesbare Exception."""
+    """Öffnet eine Videoquelle; beschädigte Dateien werfen eine lesbare Exception.
+
+    10-Bit-HEVC (yuv420p10le) wird via ffmpeg nach 8-Bit (yuv420p)
+    transkodiert, damit moviepy/OpenCV die Frames verarbeiten können.
+    """
+    import tempfile
+    import subprocess
     from moviepy import VideoFileClip
+
+    # Prüfen ob 10-Bit-HEVC -> dann nach 8-Bit transkodieren
+    probe_cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=pix_fmt,codec_name",
+        "-of", "csv=p=0", str(path)
+    ]
+    try:
+        result = subprocess.run(probe_cmd, capture_output=True, timeout=10, check=True)
+        out = result.stdout.decode().strip()
+        if "yuv420p10le" in out or "p010le" in out:
+            # 10-Bit -> temporär nach 8-Bit transkodieren
+            tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            tmp.close()
+            transcode_cmd = [
+                "ffmpeg", "-v", "error", "-y",
+                "-i", str(path),
+                "-pix_fmt", "yuv420p",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
+                "-an",  # Audio weg (Pipeline exportiert stumm)
+                tmp.name
+            ]
+            subprocess.run(transcode_cmd, timeout=120, check=True)
+            clip = VideoFileClip(tmp.name, audio=False)
+            # Temporäre Datei beim Schließen löschen
+            clip.close = lambda: (VideoFileClip.close(clip), __import__("os").unlink(tmp.name))
+            return clip
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+        pass  # Fallback: normal öffnen
 
     clip = VideoFileClip(str(path), audio=False)
     if clip.size is None or clip.size[0] < 2 or clip.size[1] < 2:
@@ -418,26 +453,35 @@ def write_cover(
 def trip_from_path(
     paths: Sequence[str | Path],
     bases: Sequence[str | Path] = (),
+    ingest_dir: str | Path | None = None,
 ) -> str | None:
     """Errät den Tripnamen aus dem Ingest-Unterordner.
 
     Legt man Clips nach ``ingest/Madeira 2026/`` ab, ist der Ordnername der
-    Tripname. ``bases`` sind die Eingabewurzeln dieses Laufs (CLI-``-i`` sonst
-    ``ingest_dir``), damit auch ein explizit übergebener Ordner greift.
-    Gibt es keinen gemeinsamen Unterordner, kommt ``None`` zurück (der
-    Aufrufer fällt dann auf Titel/Ort zurück).
+    Tripname. ``bases`` sind die Eingabewurzeln dieses Laufs (CLI-``-i``).
+    ``ingest_dir`` ist der konfigurierte Ingest-Ordner (Fallback für Watcher).
+    Gibt es keinen gemeinsamen Unterordner, kommt ``None`` zurück.
     """
     if not paths:
         return None
 
     roots: list[Path] = []
+    # Zuerst: explizit übergebene Bases (CLI -i)
     for raw_base in bases:
         try:
             candidate = expand_path(raw_base).resolve()
         except OSError:  # pragma: no cover
             continue
-        # Nur Verzeichnisse taugen als Wurzel - eine einzelne Datei ist kein Ingest.
         if candidate.is_dir() and candidate not in roots:
+            roots.append(candidate)
+
+    # Fallback: konfiguriertes ingest_dir (für Watcher, der Dateipfade als sources übergibt)
+    if not roots and ingest_dir:
+        try:
+            candidate = expand_path(ingest_dir).resolve()
+        except OSError:
+            candidate = None
+        if candidate and candidate.is_dir():
             roots.append(candidate)
 
     names: set[str] = set()
@@ -625,7 +669,7 @@ def run(
     reference = usable[0]
     # Ohne expliziten Titel: Tripname aus dem Ingest-Unterordner, dann
     # Ortsname (Kurzform), dann Datum, sonst "Tenor".
-    trip = trip_from_path([str(c.path) for c in usable], sources)
+    trip = trip_from_path([str(c.path) for c in usable], sources, get(cfg, "ingest_dir"))
     effective_title = title or trip or primary_place(place) or reference.date_label or "Tenor"
     subtitle = build_subtitle(place, reference.date_label)
     result.title = effective_title

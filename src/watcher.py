@@ -169,6 +169,7 @@ class IngestProcessor:
         self.batch_window = float(get(cfg, "watcher.batch_window", 12) or 0)
         self.delete_after = bool(get(cfg, "watcher.delete_after", False))
         self.recursive = bool(get(cfg, "watcher.recursive", False))
+        self.ignore_dirs = list(get(cfg, "watcher.ignore_dirs", []))
         self.output_dir = expand_path(get(cfg, "output_dir", "output"))
         state_dir = self.output_dir.parent if self.output_dir.name else self.output_dir
         self.state = WatcherState.load(state_dir / STATE_FILENAME)
@@ -271,7 +272,9 @@ class IngestProcessor:
 
     def scan_existing(self) -> int:
         """Verarbeitet beim Start bereits vorhandene, unbekannte Clips."""
-        files = iter_media_files(self.ingest_dir, self.extensions, recursive=self.recursive)
+        files = iter_media_files(
+            self.ingest_dir, self.extensions, recursive=self.recursive, ignore_dirs=self.ignore_dirs
+        )
         fresh = [p for p in files if not self.state.is_processed(p)]
         if not fresh:
             log.info("Keine unverarbeiteten Clips im Ingest-Ordner")
