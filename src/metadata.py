@@ -32,6 +32,9 @@ log = logging.getLogger("tenor.metadata")
 FFPROBE = "ffprobe"
 FFPROBE_TIMEOUT = 30  # Sekunden - ein hängendes ffprobe darf den Lauf nicht blockieren
 
+# Rohbitstream-Endungen ohne Container (kein Moov-Atom -> ffprobe braucht -f hevc)
+RAW_VIDEO_SUFFIXES = {".hevc", ".h265", ".265", ".h264", ".264", ".avc", ".av1"}
+
 #: ISO-6709 mit Vorzeichenpaaren, z. B. ``+53.4702-006.1153+023.5/``
 _SIGNED_PAIR = re.compile(r"([+-]\d{1,3}(?:\.\d+)?)\s*([+-]\d{1,3}(?:\.\d+)?)")
 #: ISO-6709 Kurzform ``+5328-00607/``
@@ -135,10 +138,15 @@ class ClipInfo:
 # ffprobe
 # --------------------------------------------------------------------------- #
 def ffprobe_json(path: str | Path) -> dict[str, Any] | None:
-    """Ruft ffprobe im JSON-Modus auf. Fehler -> ``None`` (nie eine Exception)."""
-    cmd = [
-        FFPROBE,
-        "-v", "quiet",
+    """Ruft ffprobe im JSON-Modus auf. Fehler -> ``None`` (nie eine Exception).
+
+    Rohbitstreams ohne Container (``.hevc``/``.h265``) bekommen den passenden
+    Demuxer explizit gesetzt, sonst findet ffprobe keine Streams.
+    """
+    cmd = [FFPROBE, "-v", "quiet"]
+    if Path(path).suffix.lower() in RAW_VIDEO_SUFFIXES:
+        cmd += ["-f", "hevc"]
+    cmd += [
         "-print_format", "json",
         "-show_format",
         "-show_streams",
@@ -460,7 +468,27 @@ def probe_clip(path: str | Path) -> ClipInfo:
             except (TypeError, ValueError, ZeroDivisionError):
                 clip.fps = 0.0
         if clip.duration == 0.0:
-            clip.duration = max(_to_float(stream.get("duration")) or 0.0, 0.0)
+            stream_dur = _to_float(stream.get("duration"))
+            clip.duration = max(0.0 if stream_dur != stream_dur else stream_dur, 0.0)
+            # Rohbitstream ohne Container: Dauer via Frame-Count berechnen.
+            if clip.duration == 0.0 and clip.fps > 0.0:
+                try:
+                    count_cmd = [
+                        FFPROBE, "-v", "quiet",
+                        "-select_streams", "v:0",
+                        "-count_frames",
+                        "-show_entries", "stream=nb_read_frames",
+                        "-of", "csv=p=0",
+                    ]
+                    if Path(path).suffix.lower() in RAW_VIDEO_SUFFIXES:
+                        count_cmd += ["-f", "hevc"]
+                    count_cmd.append(str(path))
+                    proc = subprocess.run(count_cmd, capture_output=True, timeout=30, check=False)
+                    if proc.returncode == 0 and proc.stdout.strip():
+                        frames = int(proc.stdout.strip())
+                        clip.duration = frames / clip.fps
+                except (ValueError, subprocess.TimeoutExpired, OSError):
+                    pass
         break
 
     lat, lon = parse_coordinates(geo_raw)

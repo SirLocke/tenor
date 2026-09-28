@@ -12,10 +12,13 @@ output_dir: /srv/nas/Nils/video-cut/output
 music_dir: /srv/nas/Nils/video-cut/music
 
 # Als Rohmaterial akzeptierte Endungen (case-insensitiv geprüft).
+# HEVC: iPhone liefert H.265 als .MOV/.MP4, teils auch als Rohbitstream.
 extensions:
   - .mov
   - .mp4
   - .m4v
+  - .hevc
+  - .h265
 
 # =============================================================================
 # Video-Export

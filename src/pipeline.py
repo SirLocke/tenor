@@ -415,46 +415,62 @@ def write_cover(
 # --------------------------------------------------------------------------- #
 # Naming
 # --------------------------------------------------------------------------- #
-def trip_from_path(paths: Sequence[str | Path], ingest_dir: str | Path | None) -> str | None:
+def trip_from_path(
+    paths: Sequence[str | Path],
+    bases: Sequence[str | Path] = (),
+) -> str | None:
     """Errät den Tripnamen aus dem Ingest-Unterordner.
 
     Legt man Clips nach ``ingest/Madeira 2026/`` ab, ist der Ordnername der
-    Tripname. Gibt es keinen gemeinsamen Unterordner, kommt ``None`` zurück
-    (der Aufrufer fällt dann auf Titel/Ort zurück).
+    Tripname. ``bases`` sind die Eingabewurzeln dieses Laufs (CLI-``-i`` sonst
+    ``ingest_dir``), damit auch ein explizit übergebener Ordner greift.
+    Gibt es keinen gemeinsamen Unterordner, kommt ``None`` zurück (der
+    Aufrufer fällt dann auf Titel/Ort zurück).
     """
     if not paths:
         return None
-    base: Path | None = None
-    if ingest_dir:
+
+    roots: list[Path] = []
+    for raw_base in bases:
         try:
-            base = expand_path(ingest_dir).resolve()
+            candidate = expand_path(raw_base).resolve()
         except OSError:  # pragma: no cover
-            base = None
+            continue
+        # Nur Verzeichnisse taugen als Wurzel - eine einzelne Datei ist kein Ingest.
+        if candidate.is_dir() and candidate not in roots:
+            roots.append(candidate)
 
     names: set[str] = set()
+    fallback: str | None = None
     for raw in paths:
-        path = Path(raw).expanduser()
         try:
-            resolved = path.resolve()
+            resolved = Path(raw).expanduser().resolve()
         except OSError:  # pragma: no cover
-            resolved = path
-        parent = resolved.parent
-        if base is not None and parent == base:
-            continue  # direkt im Ingest-Ordner -> kein Trip-Unterordner
-        if base is not None:
+            resolved = Path(raw)
+        if fallback is None:
+            fallback = resolved.parent.name or None
+
+        for root in roots:
             try:
-                relative = resolved.relative_to(base)
+                relative = resolved.relative_to(root)
             except ValueError:
                 continue
+            # Direkt im Ingest-Ordner -> kein Trip-Unterordner.
             if len(relative.parts) >= 2:
                 names.add(relative.parts[0])
-            continue
-        # Ohne bekanntes ingest_dir: der Elternordner des ersten Clips
-        if not names:
-            names.add(parent.name)
+            break
+        else:
+            # Clip liegt unter keiner bekannten Wurzel: Elternordner nehmen,
+            # aber nur wenn alle Clips dort liegen ( unten über names geprüft ).
+            if roots:
+                continue
+            names.add(resolved.parent.name)
+
+    names.discard("")
     if len(names) == 1:
-        candidate = names.pop().strip()
-        return candidate or None
+        return names.pop()
+    if not roots and fallback and len(names) == 1:
+        return fallback
     return None
 
 
@@ -514,7 +530,11 @@ def build_output_dir(
             continue
         if segment != segment.strip("/") or "/" in segment:
             continue
-        parts.append(slugify(segment, max_length=60))
+        slug = slugify(segment, max_length=60)
+        # Direkt aufeinanderfolgende Dubletten (z. B. Titel == Tag) zusammenfassen,
+        # sonst entstehen sinnlose Ordner wie 2026-09-11/2026-09-11/.
+        if slug and (not parts or parts[-1] != slug):
+            parts.append(slug)
     if not parts:
         return base
     return base.joinpath(*parts)
@@ -605,7 +625,7 @@ def run(
     reference = usable[0]
     # Ohne expliziten Titel: Tripname aus dem Ingest-Unterordner, dann
     # Ortsname (Kurzform), dann Datum, sonst "Tenor".
-    trip = trip_from_path([str(c.path) for c in usable], get(cfg, "ingest_dir"))
+    trip = trip_from_path([str(c.path) for c in usable], sources)
     effective_title = title or trip or primary_place(place) or reference.date_label or "Tenor"
     subtitle = build_subtitle(place, reference.date_label)
     result.title = effective_title

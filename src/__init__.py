@@ -43,7 +43,7 @@ DEFAULTS: dict[str, Any] = {
     "ingest_dir": "/srv/nas/nils/videos",
     "output_dir": "/srv/nas/nils/videos/output",
     "music_dir": "/srv/nas/nils/music",
-    "extensions": [".mov", ".mp4", ".m4v"],
+    "extensions": [".mov", ".mp4", ".m4v", ".hevc", ".h265"],
     "video": {
         "width": 1080,
         "height": 1920,
