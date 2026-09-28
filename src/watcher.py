@@ -263,7 +263,8 @@ class IngestProcessor:
                 if not self.delete_after:
                     self.state.mark(path)
             self.state.save()
-            log.info("Reel geschrieben: %s", result.output)
+            for reel in result.outputs or ([result.output] if result.output else []):
+                log.info("Reel geschrieben: %s", reel)
         else:
             log.error("Kein Export - Dateien bleiben zur späteren Verarbeitung liegen")
         return result
@@ -281,6 +282,25 @@ class IngestProcessor:
 
     def request_stop(self) -> None:
         self._stop.set()
+
+    def cleanup_partials(self) -> int:
+        """Entfernt ``*.part.mp4`` aus dem Output - Reste abgebrochener Läufe.
+
+        Wird beim Start aufgerufen: nach einem SIGTERM oder einem Stromausfall
+        können unfertige Renderdateien liegen bleiben. Sie sind nie gültig
+        und werden nie von der Pipeline weiterverwendet.
+        """
+        if not self.output_dir.is_dir():
+            return 0
+        removed = 0
+        for part in self.output_dir.rglob("*.part.mp4"):
+            try:
+                part.unlink()
+                removed += 1
+                log.info("Verwaiste Renderdatei entfernt: %s", part.name)
+            except OSError as exc:
+                log.warning("Renderdatei nicht löschbar (%s): %s", part.name, exc)
+        return removed
 
 
 class IngestHandler(FileSystemEventHandler):
@@ -325,6 +345,11 @@ def watch(cfg: Mapping[str, Any], *, config_path: str | None = None, once: bool 
         log.error("Ingest-Ordner existiert nicht: %s", ingest_dir)
         return 2
     ingest_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        processor.cleanup_partials()
+    except Exception as exc:  # pragma: no cover
+        log.warning("Aufräumen verwaister Renderdateien fehlgeschlagen: %s", exc)
 
     if bool(get(cfg, "watcher.process_existing_on_start", True)):
         try:

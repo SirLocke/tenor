@@ -6,13 +6,51 @@ einem Dark-Film-Grading und exportiert stumme **1080x1920 (9:16)** Reels/Shorts
 inklusive Cover-Thumbnail.
 
 ```
-Rohclips (MOV/MP4)          Reels + Cover
-/srv/nas/nils/videos   ──►  /srv/nas/nils/videos/output
-        │  watchdog + Debounce          │
-        │  ffprobe (Zeit/GPS)           └─ 1080x1920 H.264, yuv420p, 30 fps, stumm
+Rohclips (MOV/MP4)                     Reels + Cover
+/srv/nas/Nils/video-cut/ingest   ──►  /srv/nas/Nils/video-cut/output
+        │  watchdog + Debounce                    │
+        │  ffprobe (Zeit/GPS)                     └─ 1080x1920 H.264, yuv420p, 30 fps, stumm
         │  librosa Beat-Grid
         └─ center-crop 9:16 → Dark-Film-LUT → rechtsbündige Typografie
 ```
+
+## Ordnerstruktur
+
+Die Clips werden nach **Tripname und Aufnahmetag** sortiert. Der Tripname ist
+der Ordnername unterhalb von `ingest_dir`:
+
+```
+/srv/nas/Nils/video-cut/
+├── ingest/                     ← hier landen die Rohclips
+│   └── Madeira 2026/           ← Ordnername = Tripname
+│       ├── IMG_1234.MOV
+│       └── IMG_1235.MOV
+├── music/                      ← MP3 fürs Beat-Matching
+└── output/                     ← Ergebnis
+    └── Madeira-2026/           ← {trip}, slugifiziert
+        ├── 2026-09-11/         ← {day}, Aufnahmetag aus den Metadaten
+        │   ├── 2026-09-28_Madeira-2026_183045.mp4
+        │   └── 2026-09-28_Madeira-2026_183045.jpg
+        └── 2026-09-12/         ← jeder Tag wird ein eigenes Reel
+            └── ...
+```
+
+Clips ohne Aufnahmetag landen gemeinsam in `_ohne-datum`. Fehlen in den
+Metadaten Zeit und GPS, greift als Rückfall die Dateizeit (mtime).
+
+Beide Ebenen sind über `naming.folder_template` steuerbar:
+
+| Platzhalter | Bedeutung              | Beispiel       |
+| ------------ | ---------------------- | -------------- |
+| `{trip}`     | Tripname, slugifiziert | `Madeira-2026` |
+| `{day}`      | Aufnahmetag            | `2026-09-11`   |
+| `{date}`     | Exportdatum            | `2026-09-28`   |
+| `{time}`     | Exportzeit             | `183045`       |
+| `{slug}`     | Titel, slugifiziert    | `madeira-2026` |
+| `{title}`    | Titel, slugifiziert    | `madeira-2026` |
+
+Leerer Wert (`folder_template: ""`) schreibt direkt nach `output_dir` ohne
+Unterordner.
 
 ## Features
 
@@ -36,8 +74,13 @@ Rohclips (MOV/MP4)          Reels + Cover
 - **Watcher mit Debounce**: eine Datei gilt erst als verarbeitet, wenn ihre
   Größe 5 s unverändert bleibt. Danach wird noch ein Batch-Fenster gesammelt,
   damit ein iPhone-Burst in *einem* Reel landet.
+- **Ein Reel pro Tag**: Material aus mehreren Aufnahmetagen wird automatisch
+  getrennt, damit im Ordner `2026-09-12/` auch wirklich nur der 12.09. liegt.
+- **Tripname aus dem Ingest-Ordner**: `ingest/Madeira 2026/` ergibt
+  `output/Madeira-2026/` – ohne einen Titelparameter überall.
 - **State-Datei** (`.tenor-state.json`) verhindert Doppelverarbeitung nach
-  Neustarts.
+  Neustarts. Verwaiste `*.part.mp4` aus abgebrochenen Läufen werden beim Start
+  entfernt.
 
 ## Installation
 
@@ -66,9 +109,9 @@ python3 -m venv .venv
 `config.yaml` anpassen – mindestens `ingest_dir`, `output_dir`, `music_dir`:
 
 ```yaml
-ingest_dir: /srv/nas/nils/videos
-output_dir: /srv/nas/nils/videos/output
-music_dir: /srv/nas/nils/music
+ingest_dir: /srv/nas/Nils/video-cut/ingest
+output_dir: /srv/nas/Nils/video-cut/output
+music_dir: /srv/nas/Nils/video-cut/music
 ```
 
 Werte lassen sich auch per Umgebungsvariable überschreiben – der Name ist der
@@ -101,17 +144,21 @@ Der Grading-Look steckt komplett in `style:`:
 ## CLI-Nutzung
 
 ```bash
-# Kompletter Ordner, Titel, Beat-Matching über die neueste MP3 im music_dir
-.venv/bin/python -m src.pipeline -i /srv/nas/nils/videos -o /srv/nas/nils/videos/output -t "Madeira 2026"
+# Kompletter Ordner, Beat-Matching über die neueste MP3 im music_dir.
+# Ohne -t wird der Ordnername unterhalb von ingest_dir zum Tripnamen.
+.venv/bin/python -m src.pipeline -i /srv/nas/Nils/video-cut/ingest
+
+# Tripname und Ausgabeordner explizit
+.venv/bin/python -m src.pipeline -i /srv/nas/Nils/video-cut/ingest -t "Madeira 2026"
 
 # Einzelne Datei, explizite Musik
 .venv/bin/python -m src.pipeline -i clip.MOV -o out/ -t "Madeira" -m song.mp3
 
-# Nur den Schnittplan ansehen, kein Export
-.venv/bin/python -m src.pipeline -i /srv/nas/nils/videos --dry-run
+# Nur den Schnittplan ansehen, kein Export (legt nichts an)
+.venv/bin/python -m src.pipeline -i /srv/nas/Nils/video-cut/ingest --dry-run
 
 # Metadaten inspizieren (Debug)
-.venv/bin/python -m src.metadata -i /srv/nas/nils/videos
+.venv/bin/python -m src.metadata -i /srv/nas/Nils/video-cut/ingest
 
 # Watcher manuell starten
 .venv/bin/python -m src.watcher --config config.yaml
@@ -123,9 +170,22 @@ Wichtige Flags der Pipeline: `--no-cover`, `--no-geo` (ohne Netzwerk),
 
 ### Ausgabe
 
+Pro Aufnahmetag ein Reel, inklusive Cover:
+
 ```
-2026-09-28_Madeira-2026_134838.mp4   H.264, yuv420p, 30 fps, 1080x1920, stumm
-2026-09-28_Madeira-2026_134838.jpg   Cover-Frame bei Sekunde 0.5
+output/Madeira-2026/2026-09-11/
+├── 2026-09-28_Madeira-2026_134838.mp4   H.264, yuv420p, 30 fps, 1080x1920, stumm
+└── 2026-09-28_Madeira-2026_134838.jpg   Cover-Frame bei Sekunde 0.5
+```
+
+`--json` listet alle erzeugten Reels:
+
+```json
+{
+  "outputs": [".../2026-09-11/….mp4", ".../2026-09-12/….mp4"],
+  "covers":  [".../2026-09-11/….jpg", ".../2026-09-12/….jpg"],
+  "cuts": 5, "duration": 7.0, "trip": "Madeira 2026"
+}
 ```
 
 Geschrieben wird zunächst nach `*.part.mp4` und erst nach erfolgreichem
@@ -163,9 +223,9 @@ systemctl --user disable --now tenor-watcher.service
 systemctl --user enable --now tenor-watcher.path
 ```
 
-Hinweis: Der `.path`-Unit startet den Service bei jeder Ordneränderung. Wegen
-`Restart=on-failure` läuft der Watcher dort nur bis zum ersten erfolgreichen
-Durchlauf. Für den Dauerbetrieb den **Service** aktivieren (Variante oben).
+Hinweis: Der `.path`-Unit startet den Service nur bei Änderungen direkt in
+`ingest_dir`. Für Clips in Trip-Unterordnern den **Service** dauerhaft
+aktivieren (Variante oben) – er überwacht rekursiv.
 
 Alle Pfade in der Unit stehen als `%h/…` (Home des Users). Wenn das Repo woanders
 liegt, `WorkingDirectory=` und `ExecStart=` anpassen.
@@ -198,9 +258,12 @@ tenor/
    `+53.4702-006.1153+023.5/`, `+5328-00607/` und `53°28'12"N 6°06'55"W`.
    `Geocoder` löst Koordinaten über Nominatim auf und cacht sie in
    `.cache/geocoding.json` (inklusive Negativ-Caching bei Netzwerkfehlern).
-2. **`pipeline.py`** – `build_segments()` legt die Cuts chronologisch fest und
+2. **`pipeline.py`** – `trip_from_path()` liest den Tripnamen aus dem
+   Ingest-Unterordner, `build_segments()` legt die Cuts chronologisch fest und
    kürzt zu langes Material zentriert (`mid - dur/2 … mid + dur/2`). Cuts,
-   die unter `target_min` fallen, werden verworfen.
+   die unter `target_min` fallen, werden verworfen. Anschließend gruppiert
+   `run()` das Material nach Aufnahmetag und ruft für jede Gruppe
+   `export_reel()` auf.
 3. **`styling.py`** – `center_crop_resize()` beschneidet auf exakt 9:16,
    `make_grader()` legt die LUT und die Farbstufe auf jeden Frame,
    `build_text_overlay()` rendert Titel/Unterzeile rechtsbündig mit Shadow.

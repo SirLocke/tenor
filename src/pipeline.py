@@ -63,11 +63,14 @@ class RenderResult:
 
     output: Path | None = None
     cover: Path | None = None
+    outputs: list[Path] = field(default_factory=list)
+    covers: list[Path] = field(default_factory=list)
     segments: list[Segment] = field(default_factory=list)
     title: str = ""
     subtitle: str = ""
     duration: float = 0.0
     place: str | None = None
+    trip: str | None = None
     beat_source: str = "fallback"
     errors: list[str] = field(default_factory=list)
 
@@ -412,22 +415,109 @@ def write_cover(
 # --------------------------------------------------------------------------- #
 # Naming
 # --------------------------------------------------------------------------- #
-def build_output_name(cfg: Mapping[str, Any], title: str, when: float) -> str:
-    naming = get(cfg, "naming", {}) or {}
-    template = str(naming.get("template", "{date}_{slug}_{time}"))
+def trip_from_path(paths: Sequence[str | Path], ingest_dir: str | Path | None) -> str | None:
+    """Errät den Tripnamen aus dem Ingest-Unterordner.
+
+    Legt man Clips nach ``ingest/Madeira 2026/`` ab, ist der Ordnername der
+    Tripname. Gibt es keinen gemeinsamen Unterordner, kommt ``None`` zurück
+    (der Aufrufer fällt dann auf Titel/Ort zurück).
+    """
+    if not paths:
+        return None
+    base: Path | None = None
+    if ingest_dir:
+        try:
+            base = expand_path(ingest_dir).resolve()
+        except OSError:  # pragma: no cover
+            base = None
+
+    names: set[str] = set()
+    for raw in paths:
+        path = Path(raw).expanduser()
+        try:
+            resolved = path.resolve()
+        except OSError:  # pragma: no cover
+            resolved = path
+        parent = resolved.parent
+        if base is not None and parent == base:
+            continue  # direkt im Ingest-Ordner -> kein Trip-Unterordner
+        if base is not None:
+            try:
+                relative = resolved.relative_to(base)
+            except ValueError:
+                continue
+            if len(relative.parts) >= 2:
+                names.add(relative.parts[0])
+            continue
+        # Ohne bekanntes ingest_dir: der Elternordner des ersten Clips
+        if not names:
+            names.add(parent.name)
+    if len(names) == 1:
+        candidate = names.pop().strip()
+        return candidate or None
+    return None
+
+
+def _naming_values(cfg: Mapping[str, Any], title: str, when: float, day: str) -> dict[str, str]:
+    """Platzhalter für Dateinamen und Unterordner."""
     stamp = time.localtime(when)
-    values = {
+    return {
         "date": time.strftime("%Y-%m-%d", stamp),
         "time": time.strftime("%H%M%S", stamp),
         "slug": slugify(title),
         "title": slugify(title, max_length=80),
+        "day": day or time.strftime("%Y-%m-%d", stamp),
+        "trip": slugify(title, max_length=60),
     }
+
+
+def build_output_name(cfg: Mapping[str, Any], title: str, when: float, day: str = "") -> str:
+    naming = get(cfg, "naming", {}) or {}
+    template = str(naming.get("template", "{date}_{slug}_{time}"))
+    values = _naming_values(cfg, title, when, day)
     try:
-        name = template.format(**values)
+        return template.format(**values)
     except KeyError as exc:
         log.warning("Unbekannter Platzhalter %s in naming.template - Fallback", exc)
-        name = f"{values['date']}_{values['slug']}_{values['time']}"
-    return name
+        return f"{values['date']}_{values['slug']}_{values['time']}"
+
+
+def build_output_dir(
+    base: Path,
+    cfg: Mapping[str, Any],
+    title: str,
+    when: float,
+    day: str = "",
+) -> Path:
+    """Baut ``<output_dir>/<trip>/<day>/`` gemäß ``naming.folder_template``.
+
+    ``naming.folder_template: ""`` deaktiviert die Unterordner komplett,
+    dann wird direkt in ``base`` geschrieben.
+    """
+    naming = get(cfg, "naming", {}) or {}
+    template = str(naming.get("folder_template", "{trip}/{day}")).strip()
+    if not template:
+        return base
+
+    values = _naming_values(cfg, title, when, day)
+    try:
+        relative = template.format(**values)
+    except KeyError as exc:
+        log.warning("Unbekannter Platzhalter %s in naming.folder_template - Fallback", exc)
+        relative = f"{values['trip']}/{values['day']}"
+
+    # Jedes Segment gegen Traversal und leere Komponenten absichern
+    parts: list[str] = []
+    for raw_segment in relative.replace("\\", "/").split("/"):
+        segment = raw_segment.strip()
+        if not segment or segment in (".", ".."):
+            continue
+        if segment != segment.strip("/") or "/" in segment:
+            continue
+        parts.append(slugify(segment, max_length=60))
+    if not parts:
+        return base
+    return base.joinpath(*parts)
 
 
 def unique_path(directory: Path, stem: str, suffix: str) -> Path:
@@ -513,11 +603,16 @@ def run(
     place = dominant_place(usable)
     result.place = place
     reference = usable[0]
-    # Ohne expliziten Titel: Ortsname ( Kurzform ), sonst Datum, sonst "Tenor".
-    effective_title = title or primary_place(place) or reference.date_label or "Tenor"
+    # Ohne expliziten Titel: Tripname aus dem Ingest-Unterordner, dann
+    # Ortsname (Kurzform), dann Datum, sonst "Tenor".
+    trip = trip_from_path([str(c.path) for c in usable], get(cfg, "ingest_dir"))
+    effective_title = title or trip or primary_place(place) or reference.date_label or "Tenor"
     subtitle = build_subtitle(place, reference.date_label)
     result.title = effective_title
+    result.trip = trip
     result.subtitle = subtitle
+    if trip and not title:
+        log.info("Tripname aus Ingest-Unterordner erkannt: %r", trip)
 
     music_path = _pick_music(music, cfg)
     durations: list[float] = []
@@ -549,7 +644,121 @@ def run(
         result.beat_source,
     )
 
+    now = time.time()
+    base_out = expand_path(output_dir or get(cfg, "output_dir", "output"))
+    if not dry_run:
+        base_out = ensure_dir(base_out)
+
+    # Clips nach Aufnahmetag gruppieren: jeder Tag wird ein eigenes Reel in
+    # <trip>/<tag>/. Clips ohne Datum landen gemeinsam in "_ohne-datum".
+    groups: dict[str, list[ClipInfo]] = {}
+    for clip in usable:
+        groups.setdefault(clip.date_label or "_ohne-datum", []).append(clip)
+    if len(groups) > 1:
+        log.info(
+            "Material verteilt sich auf %d Tage: %s",
+            len(groups),
+            ", ".join(f"{k} ({len(v)} Dateien)" for k, v in sorted(groups.items())),
+        )
+
+    grade = GradeConfig.from_config(cfg)
+    outputs: list[Path] = []
+    covers: list[Path] = []
+    total_duration = 0.0
+
+    for day, day_clips in sorted(groups.items()):
+        # Bei einem einzigen Tag wurde der Schnittplan oben schon gebaut.
+        if len(groups) == 1:
+            day_segments = segments
+        else:
+            day_segments = build_segments(
+                day_clips,
+                cut_cfg,
+                video_cfg,
+                durations=durations,
+                min_source_duration=min_source,
+            )
+        if not day_segments:
+            log.warning("Kein Cut für den Tag %s - übersprungen", day)
+            continue
+
+        day_place = dominant_place(day_clips)
+        day_title = title or trip or primary_place(day_place) or day
+        day_subtitle = build_subtitle(day_place, day)
+
+        target = export_reel(
+            day_segments,
+            cfg,
+            base_out,
+            title=day_title,
+            subtitle=day_subtitle,
+            day=day,
+            grade=grade,
+            when=now,
+            dry_run=dry_run,
+            no_cover=no_cover,
+        )
+        if target is None:
+            continue
+        if dry_run:
+            # Im Dry-Run existiert nichts - nur den Plan protokollieren.
+            total_duration += sum(s.duration for s in day_segments)
+            continue
+        outputs.append(target)
+        covers.append(target.with_suffix(".jpg"))
+        total_duration += sum(s.duration for s in day_segments)
+
+    result.duration = total_duration
+    result.segments = segments
+
     if dry_run:
+        return result
+
+    if not outputs:
+        log.error("Kein einziges Reel zustande gekommen")
+        return result
+
+    result.outputs = outputs
+    result.output = outputs[0]
+    result.covers = [c for c in covers if c.is_file()]
+    result.cover = result.covers[0] if result.covers else None
+
+    if delete_after:
+        for clip in dict.fromkeys(c.path for c in usable):
+            try:
+                clip.unlink()
+                log.info("Rohclip gelöscht: %s", clip.name)
+            except OSError as exc:
+                log.warning("Rohclip nicht löschbar (%s): %s", clip.name, exc)
+
+    return result
+
+
+def export_reel(
+    segments: Sequence[Segment],
+    cfg: Mapping[str, Any],
+    base_out: Path,
+    *,
+    title: str,
+    subtitle: str,
+    day: str,
+    grade: GradeConfig,
+    when: float,
+    dry_run: bool = False,
+    no_cover: bool = False,
+) -> Path | None:
+    """Rendert und exportiert einen Satz von Cuts als ein Reel.
+
+    Gibt den fertigen Pfad zurück, oder ``None`` wenn nichts exportiert wurde.
+    """
+    video_cfg = get(cfg, "video", {}) or {}
+
+    if dry_run:
+        # Nichts anlegen, nichts löschen - nur den Zielpfad vorhersagen.
+        out_dir = build_output_dir(base_out, cfg, title, when, day)
+        stem = build_output_name(cfg, title, when, day)
+        suffix = str(get(cfg, "naming.extension", ".mp4") or ".mp4")
+        log.info("Ausgabeordner: %s", out_dir)
         for segment in segments:
             log.info(
                 "PLAN %s %.2f-%.2fs (%.2fs)",
@@ -558,21 +767,21 @@ def run(
                 segment.end,
                 segment.duration,
             )
-        return result
+        return out_dir / f"{stem}{suffix}"
 
-    out_dir = ensure_dir(expand_path(output_dir or get(cfg, "output_dir", "output")))
-    stem = build_output_name(cfg, effective_title, time.time())
+    out_dir = ensure_dir(build_output_dir(base_out, cfg, title, when, day))
+    log.info("Ausgabeordner: %s", out_dir)
+
+    stem = build_output_name(cfg, title, when, day)
     suffix = str(get(cfg, "naming.extension", ".mp4") or ".mp4")
     target = unique_path(out_dir, stem, suffix)
     partial = target.parent / f"{target.stem}.part.mp4"
     partial.unlink(missing_ok=True)
 
-    grade = GradeConfig.from_config(cfg)
     try:
-        overlay = make_overlay_array(cfg, effective_title, subtitle)
+        overlay = make_overlay_array(cfg, title, subtitle)
     except Exception as exc:
         log.error("Text-Overlay konnte nicht gerendert werden (%s) - exportiere ohne Text", exc)
-        result.errors.append(f"overlay: {exc}")
         overlay = None
 
     errors: list[str] = []
@@ -583,11 +792,12 @@ def run(
         overlay_png=overlay,
         on_error=errors,
     )
-    result.errors.extend(errors)
+    for message in errors:
+        log.error("%s", message)
 
     if not rendered:
         log.error("Kein Cut konnte gerendert werden - Abbruch ohne Export")
-        return result
+        return None
 
     final = rendered[0]
     ffmpeg_params = ["-pix_fmt", str(video_cfg.get("pixel_format", "yuv420p"))]
@@ -596,8 +806,9 @@ def run(
         ffmpeg_params += ["-crf", str(crf)]
     if bool(video_cfg.get("faststart", True)):
         ffmpeg_params += ["-movflags", "+faststart"]
-    if bool(get(cfg, "video.threads", 0) or 0):
-        ffmpeg_params += ["-threads", str(int(get(cfg, "video.threads", 0)))]
+    threads = int(video_cfg.get("threads", 0) or 0)
+    if threads:
+        ffmpeg_params += ["-threads", str(threads)]
 
     try:
         final.write_videofile(
@@ -606,42 +817,35 @@ def run(
             codec=str(video_cfg.get("codec", "libx264")),
             audio=bool(video_cfg.get("audio", False)),
             preset=str(video_cfg.get("preset", "medium")),
-            threads=int(video_cfg.get("threads", 0) or 0) or None,
+            threads=threads or None,
             ffmpeg_params=ffmpeg_params,
             logger=None,
         )
     except Exception as exc:
         log.exception("Export nach %s fehlgeschlagen: %s", partial, exc)
-        result.errors.append(f"export: {exc}")
         partial.unlink(missing_ok=True)
-        return result
+        return None
+    except BaseException:
+        # SIGTERM/Stromausfall: unfertige Datei nicht liegen lassen
+        partial.unlink(missing_ok=True)
+        raise
     finally:
         _close_all([final])
         _close_all(getattr(final, "tenor_sources", []) or [])
 
     partial.replace(target)
-    result.output = target
-    log.info("Export fertig: %s (%.1fs Video)", target, result.duration)
+    log.info("Export fertig: %s (%.1fs Video)", target, sum(s.duration for s in segments))
 
     if not no_cover and bool(video_cfg.get("cover", True)):
-        cover_path = target.with_suffix(".jpg")
-        result.cover = write_cover(
+        write_cover(
             target,
-            cover_path,
+            target.with_suffix(".jpg"),
             at=float(video_cfg.get("cover_at", 0.5)),
             width=target_size(cfg)[0],
             height=target_size(cfg)[1],
         )
 
-    if delete_after:
-        for clip in dict.fromkeys(segment.clip.path for segment in segments):
-            try:
-                clip.unlink()
-                log.info("Rohclip gelöscht: %s", clip.name)
-            except OSError as exc:
-                log.warning("Rohclip nicht löschbar (%s): %s", clip.name, exc)
-
-    return result
+    return target
 
 
 # --------------------------------------------------------------------------- #
@@ -702,12 +906,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             json.dumps(
                 {
                     "output": str(result.output) if result.output else None,
+                    "outputs": [str(p) for p in result.outputs],
                     "cover": str(result.cover) if result.cover else None,
+                    "covers": [str(p) for p in result.covers],
                     "cuts": len(result.segments),
                     "duration": round(result.duration, 2),
                     "title": result.title,
                     "subtitle": result.subtitle,
                     "place": result.place,
+                    "trip": result.trip,
+                    "output_dir": str(result.output.parent) if result.output else None,
                     "beat_source": result.beat_source,
                     "errors": result.errors,
                 },

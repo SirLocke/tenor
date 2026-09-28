@@ -5,11 +5,11 @@
 # =============================================================================
 
 # Ingest: Hier landen die Rohclips (iPhone MOV/MP4). Wird vom Watcher überwacht.
-ingest_dir: /srv/nas/nils/videos
-# Export: fertige Reels/Shorts + Cover-Thumbnails.
-output_dir: /srv/nas/nils/videos/output
+ingest_dir: /srv/nas/Nils/video-cut/ingest
+# Export: fertige Reels/Shorts + Cover-Thumbnails, unterteilt nach <Trip>/<Tag>/
+output_dir: /srv/nas/Nils/video-cut/output
 # Musik: optionale MP3 für Beat-Matching.
-music_dir: /srv/nas/nils/music
+music_dir: /srv/nas/Nils/video-cut/music
 
 # Als Rohmaterial akzeptierte Endungen (case-insensitiv geprüft).
 extensions:
@@ -103,7 +103,7 @@ geocoding:
   zoom: 10
   language: de
   user_agent: "tenor/1.0 (self-hosted video pipeline; +https://github.com/SirLocke/tenor)"
-  cache_file: .cache/geocoding.json
+  cache_file: /srv/nas/Nils/video-cut/.cache/geocoding.json
   cache_precision: 3       # Nachkommastellen für Cache-Key (~$100m)
 
 # =============================================================================
@@ -112,7 +112,9 @@ geocoding:
 watcher:
   debounce_seconds: 5      # Dateigröße muss so lange stabil sein
   batch_window: 12         # nach dem ersten Clip X Sekunden weiter sammeln
-  recursive: false
+  # true = Ingest-Unterordner mitüberwachen. Der Ordnername wird dann als
+  # Tripname für den Output verwendet (ingest/Madeira 2026/ -> output/Madeira 2026/).
+  recursive: true
   process_existing_on_start: true   # beim Start bereits liegende Clips einlesen
   delete_after: false      # Rohclips nach erfolgreichem Export löschen
   min_clip_duration: 0.6   # kürzere Dateien überspringen
@@ -121,9 +123,13 @@ watcher:
 # Naming & Logging
 # =============================================================================
 naming:
+  # Dateiname innerhalb des Zielordners
   template: "{date}_{slug}_{time}"   # date=JJJJ-MM-TT, slug=Titel, time=HHMMSS
+  # Unterordner-Struktur: {trip}=Tripname, {day}=Aufnahmetag aus den Metadaten
+  # Leerer Wert "" schreibt direkt in output_dir ohne Unterordner.
+  folder_template: "{trip}/{day}"
   extension: .mp4
 
 logging:
   level: INFO
-  file: .cache/tenor.log
+  file: /srv/nas/Nils/video-cut/.cache/tenor.log

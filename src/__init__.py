@@ -120,13 +120,14 @@ DEFAULTS: dict[str, Any] = {
     "watcher": {
         "debounce_seconds": 5,
         "batch_window": 12,
-        "recursive": False,
+        "recursive": True,
         "process_existing_on_start": True,
         "delete_after": False,
         "min_clip_duration": 0.6,
     },
     "naming": {
         "template": "{date}_{slug}_{time}",
+        "folder_template": "{trip}/{day}",
         "extension": ".mp4",
     },
     "logging": {

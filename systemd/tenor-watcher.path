@@ -7,11 +7,12 @@ Documentation=https://github.com/SirLocke/tenor
 # aktivieren:  sudo systemctl enable --now tenor-watcher.service
 
 [Path]
-# Verzeichnis, das der Watcher überwacht. PathModified feuert, sobald sich
-# Änderungszeit *oder* Inhalt des Ordners ändern (auch bei neuen Unterordnern).
-PathModified=/srv/nas/nils/videos
+# Verzeichnis, das der Watcher überwacht (muss ingest_dir aus config.yaml
+# entsprechen). PathModified feuert, sobald sich Änderungszeit *oder* Inhalt
+# des Ordners ändern.
+PathModified=/srv/nas/Nils/video-cut/ingest
 # DirectoryNotEmpty feuert nur, wenn Dateien vorhanden sind:
-# DirectoryNotEmpty=/srv/nas/nils/videos
+# DirectoryNotEmpty=/srv/nas/Nils/video-cut/ingest
 Unit=tenor-watcher.service
 
 [Install]
