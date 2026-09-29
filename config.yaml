@@ -115,7 +115,7 @@ style:
   contrast: 0.22           # Blende der S-Kurve
   black_lift: 0.035        # Matte Black Toe: angehobener, matter Schwarzpunkt
   black_toe: 2.2           # Form des Auslaufs (höher = weicher)
-  highlight_ceiling: 0.94  # digitale Ausbrenner im Himmel vermeiden
+  highlight_ceiling: 0.92  # digitale Ausbrenner im Himmel vermeiden, mattere Lichter
   saturation: 0.90         # global leicht entsättigt
   shadow_desaturate: 0.18  # Schatten zusätzlich entsättigen
   teal_red: -0.006         # Cine-Teal in den Schatten:

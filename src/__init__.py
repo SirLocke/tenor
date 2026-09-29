@@ -106,7 +106,7 @@ DEFAULTS: dict[str, Any] = {
         "contrast": 0.22,
         "black_lift": 0.035,
         "black_toe": 2.2,
-        "highlight_ceiling": 0.94,
+        "highlight_ceiling": 0.92,
         "saturation": 0.90,
         "shadow_desaturate": 0.18,
         "teal_red": -0.006,

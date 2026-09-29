@@ -66,7 +66,7 @@ class GradeConfig:
     contrast: float = 0.22
     black_lift: float = 0.035
     black_toe: float = 2.2
-    highlight_ceiling: float = 0.94
+    highlight_ceiling: float = 0.92
     saturation: float = 0.90
     shadow_desaturate: float = 0.18
     teal_red: float = -0.006

@@ -170,7 +170,7 @@ Der Grading-Look steckt komplett in `style:`:
 | `gamma` | `0.93` | Belichtung: **unter** 1.0 unterbelichtet (düster), über 1.0 hellt auf |
 | `contrast` | `0.22` | Stärke der S-Kurve |
 | `black_lift` / `black_toe` | `0.035` / `2.2` | Matte Black Toe: matter, leicht angehobener Schwarzpunkt |
-| `highlight_ceiling` | `0.94` | Highlight-Roll-Off, verhindert ausgebrannte Himmel |
+| `highlight_ceiling` | `0.92` | Highlight-Roll-Off, verhindert ausgebrannte Himmel, drückt Lichter matter |
 | `saturation` / `shadow_desaturate` | `0.90` / `0.18` | leicht entsättigt, Schatten stärker |
 | `teal_red/green/blue` | `-0.006 / 0.012 / 0.026` | Cine-Teal in den Schatten |
 | `highlight_cool` | `0.010` | Lichter kühlen |
