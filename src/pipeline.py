@@ -195,14 +195,14 @@ def _plan_clip_cuts(
     max_total: float,
     already_planned: int,
     already_total: float,
+    clip_budget: float = 0.0,
+    decay: float = 2.0,
 ) -> list[float]:
     """Legt fest, wie viele Cuts ein Clip liefert und wie lang sie werden.
 
-    Die Rekursion ist die des früheren Treppenlaufs: Nach einem zentriert
-    entnommenen Cut halbiert sich der Rest annähernd, also
-    ``rest' = (rest - laenge) / 2``. Neu ist nur, dass die Positionen
-    getrennt entschieden werden - vorher hing beides an derselben Schleife,
-    wodurch die Schnitte immer am Rest klebten statt am Material.
+    Verteilt Schnitte proportional zum Material und zur Zielzeit.
+    ``decay`` (Standard 1.8) steuert die Schrittweite im verbleibenden Material,
+    sodass längere Clips proportional mehr Material beisteuern.
     """
     wanted: list[float] = []
     remaining = source_duration
@@ -215,6 +215,8 @@ def _plan_clip_cuts(
             break
         if max_total and total >= max_total:
             break
+        if clip_budget and sum(wanted) >= clip_budget:
+            break
         if remaining < t_min:
             break
 
@@ -223,11 +225,15 @@ def _plan_clip_cuts(
             want = max_total - total
             if want < t_min:
                 break
+        if clip_budget and sum(wanted) + want > clip_budget:
+            want = clip_budget - sum(wanted)
+            if want < t_min:
+                break
 
         take = min(want, remaining)
         wanted.append(take)
         total += take
-        remaining = (remaining - take) / 2.0
+        remaining = (remaining - take) / decay
 
     return wanted
 
@@ -268,19 +274,22 @@ def build_segments(
     history: list[np.ndarray] = []
     kept_total = dropped_total = shifted_total = 0
 
-    for clip in clips:
+    valid_clips = [
+        c for c in clips
+        if c.duration > 0.0 and c.duration >= max(min_source_duration, t_min)
+    ]
+
+    for idx, clip in enumerate(valid_clips):
         source_duration = clip.duration
-        if source_duration <= 0.0:
-            log.warning("%s: keine Dauer ermittelbar - wird übersprungen", clip.name)
-            continue
-        if source_duration < min_source_duration or source_duration < t_min:
-            log.info(
-                "%s: nur %.2fs Material (<%.1fs) - übersprungen",
-                clip.name,
-                source_duration,
-                max(min_source_duration, t_min),
-            )
-            continue
+
+        # Wenn ein max_total vorgegeben ist (z. B. 30s): Budget pro Clip verteilen,
+        # damit Clips über das gesamte Video gestreut werden statt am Anfang abzubrechen
+        clip_budget = 0.0
+        if max_total > 0:
+            remaining_clips = len(valid_clips) - idx
+            remaining_total = max(max_total - total, 0.0)
+            if remaining_clips > 0:
+                clip_budget = max(t_min, remaining_total / remaining_clips)
 
         wanted = _plan_clip_cuts(
             source_duration,
@@ -291,6 +300,8 @@ def build_segments(
             max_total=max_total,
             already_planned=len(segments),
             already_total=total,
+            clip_budget=clip_budget,
+            decay=float(cut_cfg.get("decay", 2.0)),
         )
         if not wanted:
             continue
@@ -496,7 +507,9 @@ def build_segment_clip(
     piece = piece.with_duration(max(end - start, frame))
 
     piece = center_crop_resize(piece, width, height)
-    piece = piece.image_transform(make_grader(grade))
+    grader = make_grader(grade)
+    if grader is not None:
+        piece = piece.image_transform(grader)
 
     if overlay_png is not None:
         text = ImageClip(overlay_png, duration=piece.duration)
@@ -938,6 +951,9 @@ def run(
     limit: int = 0,
     dry_run: bool = False,
     delete_after: bool = False,
+    duration: float | None = None,
+    grade: str | None = None,
+    pace: str | None = None,
 ) -> RenderResult:
     """Kompletter Pipeline-Lauf: Metadaten -> Schnitt -> Render -> Export."""
     cfg = load_config(config_path)
@@ -948,9 +964,37 @@ def run(
     if no_geocoding:
         cfg.setdefault("geocoding", {})
         cfg["geocoding"] = {**cfg["geocoding"], "enabled": False}
+    if duration is not None:
+        cfg.setdefault("video", {})
+        cfg["video"]["max_duration"] = float(duration)
+    if grade is not None:
+        cfg.setdefault("style", {})
+        cfg["style"]["preset"] = str(grade).lower()
 
     video_cfg = get(cfg, "video", {}) or {}
-    cut_cfg = get(cfg, "cut", {}) or {}
+    cut_cfg = dict(get(cfg, "cut", {}) or {})
+
+    # Schnitt-Tempo / Pacing anpassen
+    effective_pace = pace
+    if not effective_pace:
+        max_dur = float(get(video_cfg, "max_duration", 0) or 0)
+        if 0 < max_dur <= 16:
+            effective_pace = "fast"
+        elif max_dur > 0:
+            effective_pace = "medium"
+
+    if effective_pace == "fast":
+        cut_cfg["target"] = 1.6
+        cut_cfg["target_min"] = 1.3
+        cut_cfg["target_max"] = 2.0
+    elif effective_pace == "medium":
+        cut_cfg["target"] = 2.3
+        cut_cfg["target_min"] = 1.7
+        cut_cfg["target_max"] = 2.9
+    elif effective_pace == "slow":
+        cut_cfg["target"] = 3.2
+        cut_cfg["target_min"] = 2.4
+        cut_cfg["target_max"] = 4.0
 
     result = RenderResult()
     if not sources:
@@ -1080,7 +1124,7 @@ def run(
             ", ".join(f"{k} ({len(v)} Dateien)" for k, v in sorted(groups.items())),
         )
 
-    grade = GradeConfig.from_config(cfg)
+    grade_obj = GradeConfig.from_config(cfg, preset=grade)
     outputs: list[Path] = []
     covers: list[Path] = []
     total_duration = 0.0
@@ -1114,7 +1158,7 @@ def run(
             title=day_title,
             subtitle=day_subtitle,
             day=day,
-            grade=grade,
+            grade=grade_obj,
             when=now,
             dry_run=dry_run,
             no_cover=no_cover,
@@ -1335,6 +1379,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-cover", action="store_true", help="kein Cover-Thumbnail erzeugen")
     parser.add_argument("--no-geo", action="store_true", help="Reverse-Geocoding überspringen")
     parser.add_argument("--limit", type=int, default=0, help="max. Anzahl Eingabedateien (0 = alle)")
+    parser.add_argument(
+        "--duration",
+        "--max-duration",
+        type=float,
+        default=None,
+        dest="duration",
+        help="Ziel-/Maximallänge des Reels in Sekunden (z. B. 15, 30, 45, 60; 0 = alle Clips)",
+    )
+    parser.add_argument(
+        "--grade",
+        choices=["natural", "original", "cinematic"],
+        default=None,
+        help="Farbfilter-Grading (natural = dezent/natürlich, original = kein Filter, cinematic = Dark-Film)",
+    )
+    parser.add_argument(
+        "--pace",
+        choices=["fast", "medium", "slow"],
+        default=None,
+        help="Schnitt-Tempo (fast = ~1.5s, medium = ~2.3s, slow = ~3.2s)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="nur Schnittplan ausgeben, kein Export")
     parser.add_argument("--delete-after", action="store_true", help="Rohclips nach Export löschen")
     parser.add_argument("--json", action="store_true", help="Ergebnis als JSON auf stdout")
@@ -1369,6 +1433,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         limit=args.limit,
         dry_run=args.dry_run,
         delete_after=args.delete_after,
+        duration=args.duration,
+        grade=args.grade,
+        pace=args.pace,
     )
 
     if args.json:

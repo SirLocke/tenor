@@ -108,21 +108,23 @@ quality:
   cache_dir: /srv/nas/Nils/video-cut/.cache/quality
 
 # =============================================================================
-# Dark-Film Grading ("Moody Cinematic Look")
+# Color Grading ("Natürlicher, dezenter Look")
+# Presets: natural (dezent & natürlich), original (kein Filter), cinematic (Dark-Film)
 # =============================================================================
 style:
-  gamma: 0.93              # < 1 => leicht unterbelichtet
-  contrast: 0.22           # Blende der S-Kurve
-  black_lift: 0.035        # Matte Black Toe: angehobener, matter Schwarzpunkt
-  black_toe: 2.2           # Form des Auslaufs (höher = weicher)
-  highlight_ceiling: 0.92  # digitale Ausbrenner im Himmel vermeiden, mattere Lichter
-  saturation: 0.90         # global leicht entsättigt
-  shadow_desaturate: 0.18  # Schatten zusätzlich entsättigen
-  teal_red: -0.006         # Cine-Teal in den Schatten:
-  teal_green: 0.012        #   Rot raus, Grün/Blau rein
-  teal_blue: 0.026
-  highlight_cool: 0.010    # Highlights leicht kühlen
-  skin_damp: 0.008         # Haut-/Erdtöne in den Mitteltönen dezent dämpfen
+  preset: natural          # Standard: dezent & natürlich (lebendige Farben, tiefe Schwarztöne)
+  gamma: 1.0               # 1.0 = natürliche neutrale Belichtung
+  contrast: 0.08           # dezente organische S-Kurve für Kontrast
+  black_lift: 0.0          # 0.0 = echte, tiefe Schwarztöne (kein milchiger Schleier)
+  black_toe: 1.0           # Auslaufkurve
+  highlight_ceiling: 0.99  # sanfte Begrenzung harter Spitzen
+  saturation: 1.02         # natürliche Farbsättigung erhalten
+  shadow_desaturate: 0.0   # Schattenfarbe nicht entsättigen
+  teal_red: 0.0            # keine Farbverfälschung
+  teal_green: 0.0
+  teal_blue: 0.0
+  highlight_cool: 0.0
+  skin_damp: 0.0
   text:
     anchor_x: 900          # 1080 - 180 => rechter Ankerpunkt (Safe Zone)
     y_title: 1445          # Textgruppe zwischen 1440 und 1540 px

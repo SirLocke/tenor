@@ -55,32 +55,104 @@ FONT_URLS: dict[str, tuple[tuple[str, float | None], ...]] = {
 }
 
 
+GRADE_PRESETS: dict[str, dict[str, float]] = {
+    "natural": {
+        "gamma": 1.0,
+        "contrast": 0.08,
+        "black_lift": 0.0,
+        "black_toe": 1.0,
+        "highlight_ceiling": 0.99,
+        "saturation": 1.02,
+        "shadow_desaturate": 0.0,
+        "teal_red": 0.0,
+        "teal_green": 0.0,
+        "teal_blue": 0.0,
+        "highlight_cool": 0.0,
+        "skin_damp": 0.0,
+    },
+    "original": {
+        "gamma": 1.0,
+        "contrast": 0.0,
+        "black_lift": 0.0,
+        "black_toe": 1.0,
+        "highlight_ceiling": 1.0,
+        "saturation": 1.0,
+        "shadow_desaturate": 0.0,
+        "teal_red": 0.0,
+        "teal_green": 0.0,
+        "teal_blue": 0.0,
+        "highlight_cool": 0.0,
+        "skin_damp": 0.0,
+    },
+    "cinematic": {
+        "gamma": 0.94,
+        "contrast": 0.18,
+        "black_lift": 0.015,
+        "black_toe": 2.0,
+        "highlight_ceiling": 0.94,
+        "saturation": 0.92,
+        "shadow_desaturate": 0.10,
+        "teal_red": -0.004,
+        "teal_green": 0.008,
+        "teal_blue": 0.018,
+        "highlight_cool": 0.008,
+        "skin_damp": 0.005,
+    },
+}
+
+
 # --------------------------------------------------------------------------- #
 # Grading
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class GradeConfig:
-    """Dark-Film-Parameter, eingelesen aus ``style:`` in der config.yaml."""
+    """Color-Grading-Parameter, eingelesen aus ``style:`` in der config.yaml."""
 
-    gamma: float = 0.93
-    contrast: float = 0.22
-    black_lift: float = 0.035
-    black_toe: float = 2.2
-    highlight_ceiling: float = 0.92
-    saturation: float = 0.90
-    shadow_desaturate: float = 0.18
-    teal_red: float = -0.006
-    teal_green: float = 0.012
-    teal_blue: float = 0.026
-    highlight_cool: float = 0.010
-    skin_damp: float = 0.008
+    gamma: float = 1.0
+    contrast: float = 0.08
+    black_lift: float = 0.0
+    black_toe: float = 1.0
+    highlight_ceiling: float = 0.99
+    saturation: float = 1.02
+    shadow_desaturate: float = 0.0
+    teal_red: float = 0.0
+    teal_green: float = 0.0
+    teal_blue: float = 0.0
+    highlight_cool: float = 0.0
+    skin_damp: float = 0.0
+    preset: str = "natural"
+
+    @property
+    def is_identity(self) -> bool:
+        """Prüft, ob das Grading wirkungslos (Identitätsabbildung) ist."""
+        return (
+            abs(self.gamma - 1.0) < 1e-4
+            and abs(self.contrast) < 1e-4
+            and self.black_lift < 1e-4
+            and self.highlight_ceiling >= 0.999
+            and abs(self.saturation - 1.0) < 1e-4
+            and self.shadow_desaturate < 1e-4
+            and abs(self.teal_red) < 1e-4
+            and abs(self.teal_green) < 1e-4
+            and abs(self.teal_blue) < 1e-4
+            and self.highlight_cool < 1e-4
+            and self.skin_damp < 1e-4
+        )
 
     @classmethod
-    def from_config(cls, cfg: Mapping[str, Any]) -> GradeConfig:
+    def from_config(cls, cfg: Mapping[str, Any], preset: str | None = None) -> GradeConfig:
         style = cfg.get("style") if isinstance(cfg.get("style"), Mapping) else {}
         style = style or {}
-        known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
-        return cls(**{k: float(v) for k, v in style.items() if k in known and v is not None})
+        chosen_preset = (preset or str(style.get("preset") or "natural")).lower()
+        base_params = dict(GRADE_PRESETS.get(chosen_preset, GRADE_PRESETS["natural"]))
+        known = {f for f in cls.__dataclass_fields__ if f != "preset"}  # type: ignore[attr-defined]
+        for k, v in style.items():
+            if k in known and v is not None and preset is None:
+                try:
+                    base_params[k] = float(v)
+                except (ValueError, TypeError):
+                    pass
+        return cls(preset=chosen_preset, **base_params)
 
     def tone_curve(self, samples: int = 256) -> np.ndarray:
         """1D-Tonwertkurve auf 0..1, 255 Stützstellen.
@@ -176,7 +248,13 @@ def apply_grade(frame: np.ndarray, lut: np.ndarray, grade: GradeConfig) -> np.nd
 
 
 def make_grader(grade: GradeConfig) -> Any:
-    """Erzeugt eine moviepy-taugliche ``image_func`` mit gecachter LUT."""
+    """Erzeugt eine moviepy-taugliche ``image_func`` mit gecachter LUT.
+
+    Gibt ``None`` zurück, wenn das Grading eine Identitätsabbildung ist
+    (z. B. Preset 'original' oder neutrale Werte), um unnötige Bildkopien zu sparen.
+    """
+    if grade.is_identity:
+        return None
 
     lut = _build_lut(grade)
 

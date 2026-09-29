@@ -1,0 +1,20 @@
+name: AI Triage & Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  ai:
+    uses: SirLocke/ai-runner-workflows/.github/workflows/reusable-ai-triage.yml@main
+    secrets: inherit
