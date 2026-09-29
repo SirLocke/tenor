@@ -32,6 +32,7 @@ from . import (
     slugify,
 )
 from .metadata import ClipInfo, Geocoder, collect_clips, dominant_place, primary_place
+from .spotify_beats import fetch_spotify_beats
 from .styling import (
     GradeConfig,
     build_subtitle,
@@ -615,6 +616,44 @@ def _pick_music(music: str | Path | None, cfg: Mapping[str, Any]) -> Path | None
     return candidates[0] if candidates else None
 
 
+def _fetch_spotify_beats(track_uri: str, cfg: Mapping[str, Any]) -> list[float] | None:
+    """Holt Beat-Timestamps von Spotify Audio Analysis."""
+    spotify_cfg = get(cfg, "spotify", {}) or {}
+    if not spotify_cfg.get("enabled"):
+        return None
+    try:
+        beats = fetch_spotify_beats(track_uri)
+        if beats:
+            # Beats in Intervalle (Dauer zwischen Beats) umwandeln
+            intervals: list[float] = []
+            for i in range(1, len(beats)):
+                intervals.append(beats[i] - beats[i - 1])
+            return intervals
+    except Exception as exc:  # pragma: no cover
+        log.warning("Spotify Beat-Detection fehlgeschlagen: %s", exc)
+    return None
+
+
+def _get_fallback_bpm(cfg: Mapping[str, Any], music_hint: str | Path | None) -> float:
+    """Ermittelt Fallback-BPM aus Config oder Defaults."""
+    spotify_cfg = get(cfg, "spotify", {}) or {}
+    fallback_map = spotify_cfg.get("fallback_bpm", {}) or {}
+
+    # 1. Musik-Hint (Dateiname/URI) gegen Fallback-Map matchen
+    if music_hint:
+        hint = str(music_hint).lower()
+        for key, bpm in fallback_map.items():
+            if key.lower() in hint:
+                return float(bpm)
+
+    # 2. Ersten Eintrag aus Map nehmen
+    if fallback_map:
+        return float(next(iter(fallback_map.values())))
+
+    # 3. Hardcoded Default (120 BPM = pop standard)
+    return 120.0
+
+
 def run(
     sources: Sequence[str | Path],
     *,
@@ -646,6 +685,7 @@ def run(
         sources,
         geocoder=geocoder,
         recursive=bool(get(cfg, "watcher.recursive", False)),
+        ignore_dirs=list(get(cfg, "watcher.ignore_dirs", [])),
     )
     geocoder.save_cache()
 
@@ -678,13 +718,36 @@ def run(
     if trip and not title:
         log.info("Tripname aus Ingest-Unterordner erkannt: %r", trip)
 
-    music_path = _pick_music(music, cfg)
+    # Musikquelle auflösen: lokale Datei, Spotify URI oder Fallback-BPM
     durations: list[float] = []
+    beat_source = "fallback"
+    music_path = _pick_music(music, cfg)
+
     if music_path is not None:
+        # Lokale MP3-Datei
         durations = detect_beat_durations(music_path, cut_cfg)
-        result.beat_source = f"beats:{music_path.name}" if durations else "fallback"
+        beat_source = f"beats:{music_path.name}" if durations else "fallback"
+    elif isinstance(music, str) and music.startswith("spotify:"):
+        # Spotify URI explizit übergeben
+        durations = _fetch_spotify_beats(music, cfg)
+        beat_source = f"spotify:{music}" if durations else "fallback"
     else:
-        log.info("Keine Musik gefunden - fester Takt von %.1fs", float(cut_cfg.get("fallback_interval", 1.8)))
+        # Spotify aus Config prüfen
+        spotify_cfg = get(cfg, "spotify", {}) or {}
+        if spotify_cfg.get("enabled"):
+            track_uri = spotify_cfg.get("track_uri")
+            if track_uri:
+                durations = _fetch_spotify_beats(track_uri, cfg)
+                beat_source = f"spotify:{track_uri}" if durations else "fallback"
+
+    if not durations:
+        # Fallback-BPM aus Config nutzen
+        fallback_bpm = _get_fallback_bpm(cfg, music)
+        interval = 60.0 / fallback_bpm
+        log.info("Keine Beats verfügbar – Fallback %.0f BPM (%.2fs Takt)", fallback_bpm, interval)
+        beat_source = f"fallback:{fallback_bpm}bpm"
+
+    result.beat_source = beat_source
 
     segments = build_segments(
         usable,

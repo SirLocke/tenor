@@ -318,6 +318,17 @@ class IngestHandler(FileSystemEventHandler):
         except (UnicodeDecodeError, ValueError) as exc:  # pragma: no cover
             log.debug("Pfad nicht dekodierbar: %r (%s)", raw_path, exc)
             return
+        # ignore_dirs prüfen (sowohl relativ als auch absolut)
+        try:
+            rel = path.relative_to(self.ingest_dir)
+            parts = {p.lower() for p in rel.parts}
+            if any(part in self.ignore_dirs for part in parts):
+                return
+        except ValueError:
+            # Pfad nicht unter ingest_dir - auch absoluten Pfad prüfen
+            parts = {p.lower() for p in path.parts}
+            if any(part in self.ignore_dirs for part in parts):
+                return
         try:
             self.processor.on_file_event(path)
         except Exception as exc:  # Handler darf den Observer nie killen

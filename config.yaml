@@ -139,6 +139,23 @@ nextcloud:
   scan_cmd: 'docker exec nextcloud php /var/www/html/occ files:scan --path="/nils/files/NAS-Nils/video-cut/output"'
   timeout: 60
 
+# =============================================================================
+# Spotify Beat Detection (optional)
+# Nutzt Spotify Web API Audio Analysis für präzise Beat-Timestamps.
+# Benötigt SPOTIFY_CLIENT_ID + SPOTIFY_CLIENT_SECRET als Env-Vars.
+# =============================================================================
+spotify:
+  enabled: false
+  # Fallback BPM für bekannte Songs (falls Spotify nicht konfiguriert/Track nicht gefunden).
+  # Format: "artist - title": BPM
+  # Diese dienen als Fallback, wenn kein Spotify-Key oder Track nicht gefunden.
+  fallback_bpm:
+    "generic - pop": 120
+    "generic - edm": 128
+    "generic - hiphop": 90
+    "generic - rock": 110
+    "generic - slow": 80
+
 naming:
   # Dateiname innerhalb des Zielordners
   template: "{date}_{slug}_{time}"   # date=JJJJ-MM-TT, slug=Titel, time=HHMMSS

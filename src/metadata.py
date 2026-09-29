@@ -520,14 +520,15 @@ def collect_clips(
     *,
     geocoder: Geocoder | None = None,
     recursive: bool = False,
+    ignore_dirs: Sequence[str] = (),
 ) -> list[ClipInfo]:
     """Sammelt Clips aus Dateien und/oder Verzeichnissen, chronologisch sortiert."""
     files: list[Path] = []
     for source in sources:
         path = Path(source).expanduser()
         if path.is_dir():
-            extensions = (".mov", ".mp4", ".m4v", ".movi")
-            files.extend(iter_media_files(path, extensions, recursive=recursive))
+            extensions = (".mov", ".mp4", ".m4v", ".hevc", ".h265")
+            files.extend(iter_media_files(path, extensions, recursive=recursive, ignore_dirs=ignore_dirs))
         elif path.exists():
             files.append(path)
         else:
