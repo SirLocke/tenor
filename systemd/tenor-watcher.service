@@ -28,10 +28,14 @@ TimeoutStopSec=120
 Restart=always
 RestartSec=10
 
-# Speicher-Obergrenze. Ein 5-minütiger 4K-Burst kann sonst den Server in den
-# Swap zwingen (real beobachtet: 6,4 GB Peak bei 10 Clips).
-MemoryMax=2G
-MemoryHigh=1500M
+# Speicher-Obergrenze als reiner Absturzschutz - KEIN Memory-Tuning.
+# Wichtig: cgroup memory.peak zählt den Page-Cache mit, den das Lesen der
+# 4K-HEVC-Quellen vom NAS erzeugt. Gemessen: 5,4-6,4 GB cgroup-Peak bei
+# 15 Clips, davon aber nur ~740 MB echter RSS. Ein Limit nahe an 1 GB würde
+# deshalb jeden normalen Render killen und eine Neustartschleife erzeugen.
+# 8 GB auf einem 27-GB-Host: greift nur bei echtem Leak/Runaway.
+MemoryMax=8G
+MemoryHigh=6G
 
 # Umgebung
 Environment=PYTHONUNBUFFERED=1
