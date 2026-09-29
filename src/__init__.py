@@ -67,6 +67,25 @@ DEFAULTS: dict[str, Any] = {
     },
     # Text nur auf den ersten N Cuts (0 = alle).
     "text_on_first_cuts": 2,
+    # Bildqualitäts-Gate für die Cut-Auswahl. Schwellen an echten
+    # 4K-iPhone-Clips kalibriert (s. config.yaml für die Begründung).
+    "quality": {
+        "enabled": True,
+        "sample_fps": 4.0,
+        "edge_trim": 0.25,
+        "min_sharpness": 2500.0,
+        "min_luma": 35.0,
+        "max_luma": 242.0,
+        "max_black_ratio": 0.35,
+        "max_white_ratio": 0.25,
+        "duplicate_threshold": 20.0,
+        "duplicate_memory": 3,
+        "search_offsets": [0.3, -0.3, 0.6, -0.6, 0.9, -0.9],
+        "drop_duplicates": True,
+        "keep_imperfect": True,
+        "cache_dir": ".cache/quality",
+        "timeout": 60.0,
+    },
     "spotify": {
         "enabled": False,
         "track_uri": "",

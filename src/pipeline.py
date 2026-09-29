@@ -32,6 +32,14 @@ from . import (
     slugify,
 )
 from .metadata import ClipInfo, Geocoder, collect_clips, dominant_place, primary_place
+from .quality import (
+    ClipAnalysis,
+    QualityConfig,
+    analyse_clips,
+    clamp_start,
+    plan_windows,
+    spread_windows,
+)
 from .styling import (
     GradeConfig,
     build_subtitle,
@@ -177,6 +185,53 @@ def _iter_durations(durations: Sequence[float], fallback: float, limit: int = 0)
 # --------------------------------------------------------------------------- #
 # Schnittplan
 # --------------------------------------------------------------------------- #
+def _plan_clip_cuts(
+    source_duration: float,
+    t_min: float,
+    duration_iter: Iterator[float],
+    *,
+    max_cuts: int,
+    max_per_clip: int,
+    max_total: float,
+    already_planned: int,
+    already_total: float,
+) -> list[float]:
+    """Legt fest, wie viele Cuts ein Clip liefert und wie lang sie werden.
+
+    Die Rekursion ist die des früheren Treppenlaufs: Nach einem zentriert
+    entnommenen Cut halbiert sich der Rest annähernd, also
+    ``rest' = (rest - laenge) / 2``. Neu ist nur, dass die Positionen
+    getrennt entschieden werden - vorher hing beides an derselben Schleife,
+    wodurch die Schnitte immer am Rest klebten statt am Material.
+    """
+    wanted: list[float] = []
+    remaining = source_duration
+    total = already_total
+
+    while True:
+        if max_cuts and already_planned + len(wanted) >= max_cuts:
+            break
+        if max_per_clip and len(wanted) >= max_per_clip:
+            break
+        if max_total and total >= max_total:
+            break
+        if remaining < t_min:
+            break
+
+        want = next(duration_iter)
+        if max_total and total + want > max_total:
+            want = max_total - total
+            if want < t_min:
+                break
+
+        take = min(want, remaining)
+        wanted.append(take)
+        total += take
+        remaining = (remaining - take) / 2.0
+
+    return wanted
+
+
 def build_segments(
     clips: Sequence[ClipInfo],
     cut_cfg: Mapping[str, Any],
@@ -184,22 +239,34 @@ def build_segments(
     *,
     durations: Sequence[float] = (),
     min_source_duration: float = 0.0,
+    quality_cfg: QualityConfig | None = None,
+    analyses: Mapping[Path, ClipAnalysis] | None = None,
 ) -> list[Segment]:
     """Erzeugt chronologisch geordnete Cuts aus den Rohclips.
 
-    Zu lange Rohclips werden zentriert gekürzt; ein Rest unterhalb der
-    minimalen Cutlänge wird verworfen (besser ein sauberer Beat-Cut als ein
-    0,3-Sekunden-Fetzen).
+    Wie viele Cuts ein Clip liefert, entscheidet der Beat-Takt. *Wo* im Clip
+    sie liegen, entscheidet das Qualitäts-Gate: Die Fenster werden über den
+    ganzen Clip verteilt und anschließend geprüft - auf Schärfe, Belichtung
+    und darauf, ob sie denselben Moment schon einmal zeigen. Was durchfällt,
+    wird verschoben, bis es passt.
+
+    Ohne Gate (oder wenn die Analyse nicht auswertbar war) bleibt es bei der
+    reinen Evenverteilung. Ein Rest unterhalb der minimalen Cutlänge wird
+    verworfen - besser ein sauberer Beat-Cut als ein 0,3-Sekunden-Fetzen.
     """
     t_min = float(cut_cfg.get("target_min", 1.4))
     fallback = float(cut_cfg.get("fallback_interval", 1.8))
     max_cuts = int(cut_cfg.get("max_cuts", 0) or 0)
     max_per_clip = int(cut_cfg.get("max_per_clip", 0) or 0)
     max_total = float(get(video_cfg, "max_duration", 0) or 0)
+    gate = quality_cfg if quality_cfg is not None and quality_cfg.enabled else None
+    edge_trim = gate.edge_trim if gate else 0.0
 
     segments: list[Segment] = []
     total = 0.0
     duration_iter = _iter_durations(durations, fallback, max_cuts)
+    history: list[np.ndarray] = []
+    kept_total = dropped_total = shifted_total = 0
 
     for clip in clips:
         source_duration = clip.duration
@@ -215,47 +282,74 @@ def build_segments(
             )
             continue
 
-        cursor = 0.0
+        wanted = _plan_clip_cuts(
+            source_duration,
+            t_min,
+            duration_iter,
+            max_cuts=max_cuts,
+            max_per_clip=max_per_clip,
+            max_total=max_total,
+            already_planned=len(segments),
+            already_total=total,
+        )
+        if not wanted:
+            continue
+
+        starts = spread_windows(source_duration, wanted, edge_trim)
+        windows = []
+        for start, length in zip(starts, wanted):
+            start = clamp_start(start, length, source_duration)
+            windows.append((start, start + length))
+
+        analysis = analyses.get(clip.path) if analyses else None
+        if gate is not None and (analysis is None or not analysis.usable):
+            reason = "keine Analyse" if analysis is None else (analysis.error or "unbekannt")
+            log.info("%s: Qualitätsprüfung übersprungen (%s)", clip.name, reason)
+
+        plans, history = plan_windows(
+            analysis,
+            windows,
+            gate or QualityConfig(enabled=False),
+            source_duration=source_duration,
+            reference=history,
+        )
+
+        planned_seconds = sum(end - start for start, end in windows)
         used_in_clip = 0.0
         cuts_from_clip = 0
-        while True:
-            if max_cuts and len(segments) >= max_cuts:
+        for plan in plans:
+            if not plan.kept or plan.length < t_min - 1e-3:
+                dropped_total += 1
+                continue
+            if max_total and total + plan.length > max_total:
                 break
-            if max_per_clip and cuts_from_clip >= max_per_clip:
-                break
-            if max_total and total >= max_total:
-                break
-
-            remaining = source_duration - cursor
-            if remaining < t_min:
-                break
-
-            want = next(duration_iter)
-            if max_total and total + want > max_total:
-                want = max_total - total
-                if want < t_min:
-                    break
-
-            take = min(want, remaining)
-            # Zentriert kürzen: subclip(mid - dur/2, mid + dur/2)
-            mid = cursor + remaining / 2.0
-            start = max(mid - take / 2.0, 0.0)
-            end = min(start + take, source_duration)
-            if end - start < t_min - 1e-3:
-                break
-
-            segments.append(Segment(clip=clip, start=round(start, 3), end=round(end, 3)))
-            total += end - start
-            used_in_clip += end - start
-            cursor = end
+            segments.append(
+                Segment(clip=clip, start=round(plan.start, 3), end=round(plan.end, 3))
+            )
+            total += plan.length
+            used_in_clip += plan.length
             cuts_from_clip += 1
+            if abs(plan.shifted) > 1e-3:
+                shifted_total += 1
 
+        kept_total += cuts_from_clip
         log.info(
-            "%s: %d Cuts, %.1fs von %.1fs Material genutzt",
+            "%s: %d Cuts, %.1fs von %.1fs Material genutzt%s",
             clip.name,
             cuts_from_clip,
             used_in_clip,
             source_duration,
+            f" ({100.0 * used_in_clip / planned_seconds:.0f}% der Planung)"
+            if planned_seconds > 0
+            else "",
+        )
+
+    if gate is not None and (kept_total or dropped_total or shifted_total):
+        log.info(
+            "Qualitäts-Gate: %d Cuts behalten, %d verworfen, %d verschoben",
+            kept_total,
+            dropped_total,
+            shifted_total,
         )
 
     return segments
@@ -939,12 +1033,20 @@ def run(
 
     result.beat_source = beat_source
 
+    # Qualitätsanalyse einmalig über alle nutzbaren Clips. Das Ergebnis liegt
+    # auf Platte (Key aus Pfad/mtime/Größe), wiederholte Läufe kosten also nur
+    # noch einen Blick in die Datei.
+    quality_cfg = QualityConfig.from_config(get(cfg, "quality", {}))
+    analyses = analyse_clips(usable, quality_cfg, cache_dir=expand_path(quality_cfg.cache_dir))
+
     segments = build_segments(
         usable,
         cut_cfg,
         video_cfg,
         durations=durations,
         min_source_duration=min_source,
+        quality_cfg=quality_cfg,
+        analyses=analyses,
     )
     result.segments = segments
     result.duration = sum(s.duration for s in segments)
@@ -994,6 +1096,8 @@ def run(
                 video_cfg,
                 durations=durations,
                 min_source_duration=min_source,
+                quality_cfg=quality_cfg,
+                analyses=analyses,
             )
         if not day_segments:
             log.warning("Kein Cut für den Tag %s - übersprungen", day)

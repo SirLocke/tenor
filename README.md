@@ -26,6 +26,9 @@ der Ordnername unterhalb von `ingest_dir`:
 │       ├── IMG_1234.MOV
 │       └── IMG_1235.MOV
 ├── music/                      ← MP3 fürs Beat-Matching
+├── .cache/                     ← zwischengespeicherte Analysen
+│   ├── geocoding.json
+│   └── quality/                ← Graustufen-Strips je Rohclip (Key aus Pfad/mtime)
 └── output/                     ← Ergebnis
     └── Madeira-2026/           ← {trip}, slugifiziert
         ├── 2026-09-11/         ← {day}, Aufnahmetag aus den Metadaten
@@ -70,6 +73,24 @@ Unterordner.
      120 BPM ⇒ 0,5 s Beats ⇒ 3er-Gruppe ⇒ 1,5 s Cuts.
 
   Das Reel wird **stumm** exportiert – die Musik kommt in Instagram dazu.
+- **Bildqualitäts-Gate** – vor dem Rendern wird pro Rohclip ein schmaler
+  Graustufen-Strip gezogen (ein ffmpeg-Durchlauf, Ergebnis unter
+  `quality.cache_dir` zwischengespeichert) und jedes geplante Cut-Fenster
+  damit bewertet:
+  - *lokal*: Schärfe (Laplacian-Varianz), Belichtung, Schwarz-/Weißanteil –
+    gemessen **vor** dem Grading, weil das Dark-Film-Look die Luma absenkt
+  - *global*: 16×16-Bildsignatur gegen die zuletzt gezeigten Cuts, damit
+    iPhone-Bursts und zwei Schnitte aus demselben statischen Shot nicht
+    zweimal im Reel stehen
+
+  Die Fenster werden über den ganzen Clip verteilt (vorher klebte der
+  Treppenlauf am Rest und ließ bei langen Clips über die Hälfte ungenutzt)
+  und durchgefallene Fenster werden verschoben, bis sie passen. Eine echte
+  Wiederholung wird **nicht** wegschiebbar gerettet – 0,3 s weiter steht bei
+  einem Burst immer noch derselbe Moment. Unsauberes Bildmaterial wird
+  dagegen behalten: ein weiches Bild ist besser als eine Lücke im Reel.
+  Ist eine Datei nicht auswertbar (kaputt, Timeout), wird nicht bewertet,
+  sondern alles unverändert übernommen.
 - **Dark-Film-Grading** in zwei Stufen: 256er-Tonwertkurve (Gamma, S-Kurve,
   Matte Black Toe, Highlight-Roll-Off) als LUT via OpenCV, danach eine
   Farbstufe (Entsättigung, Cine-Teal in den Schatten, kühle Highlights).
@@ -157,6 +178,26 @@ Der Grading-Look steckt komplett in `style:`:
 
 `style.text` steuert die Typografie (`anchor_x: 900`, `y_title: 1445`,
 `safe_bottom: 1540`, Schriftgrößen, Tracking, Shadow).
+
+Das Qualitäts-Gate steckt in `quality:` – `enabled: false` schaltet es
+vollständig ab, dann läuft es exakt wie früher:
+
+| Key | Default | Wirkung |
+| --- | --- | --- |
+| `sample_fps` | `4.0` | Abtastrate des Graustufen-Strips (Frames/Sekunde) |
+| `edge_trim` | `0.25` | erste/letzte Viertelsekunde eines Clips aussparen |
+| `min_sharpness` | `2500` | Laplacian-Varianz; fängt unscharfe Frames |
+| `min_luma` / `max_luma` | `35` / `242` | schwarze bzw. ausgebrannte Frames |
+| `max_black_ratio` / `max_white_ratio` | `0.35` / `0.25` | rein schwarze bzw. ausgefressene Flächen |
+| `duplicate_threshold` | `20` | Signatur-Abstand, unter dem es eine Wiederholung ist |
+| `duplicate_memory` | `3` | gegen wie viele zuletzt gezeigte Cuts verglichen wird |
+| `search_offsets` | `[0.3, -0.3, 0.6, …]` | Sekunden, um die ein Fenster verschoben wird |
+| `drop_duplicates` | `true` | echte Wiederholung verwerfen statt zu verschieben |
+| `keep_imperfect` | `true` | unsauberes Bild behalten statt zu verwerfen |
+| `cache_dir` | `/srv/nas/Nils/video-cut/.cache/quality` | Strip-Cache |
+
+Unter- und Obergrenzen mit `0` sind aus; bei `max_luma` und den Anteilen ist
+der ausgeschaltete Wert `255` bzw. `1.0`.
 
 ## CLI-Nutzung
 
@@ -259,11 +300,13 @@ tenor/
 │   ├── __init__.py     # Konfigurations-Infrastruktur (Defaults + Deep-Merge)
 │   ├── pipeline.py     # Beat-Matching, Schnittplan, Rendern, Export, Cover, CLI
 │   ├── metadata.py     # ffprobe, ISO-6709, Reverse-Geocoding, Sortierung, CLI
+│   ├── quality.py      # Bildqualitäts-Gate: Strip-Analyse, Fenster-Planung, Cache
 │   ├── spotify_beats.py# Spotify Audio-Analysis (optional, thread-sicherer Token-Cache)
 │   ├── styling.py      # LUT-Grading, Center-Crop, Font-Auflösung, Text-Overlay
 │   └── watcher.py      # watchdog-Ingest mit Debounce + Batch-Fenster
 ├── tests/
-│   └── test_stability.py  # Regressionstests (47), u. a. gegen den "tauben Watcher"
+│   ├── test_stability.py  # Regressionstests (47), u. a. gegen den "tauben Watcher"
+│   └── test_quality.py    # Kalibrierung + "verliert nie Material" (51)
 └── systemd/
     ├── tenor-watcher.service
     └── tenor-watcher.path
@@ -279,15 +322,20 @@ tenor/
    `Geocoder` löst Koordinaten über Nominatim auf und cacht sie in
    `.cache/geocoding.json` (inklusive Negativ-Caching bei Netzwerkfehlern).
 2. **`pipeline.py`** – `trip_from_path()` liest den Tripnamen aus dem
-   Ingest-Unterordner, `build_segments()` legt die Cuts chronologisch fest und
-   kürzt zu langes Material zentriert (`mid - dur/2 … mid + dur/2`). Cuts,
-   die unter `target_min` fallen, werden verworfen. Anschließend gruppiert
-   `run()` das Material nach Aufnahmetag und ruft für jede Gruppe
+   Ingest-Unterordner. `_plan_clip_cuts()` entscheidet, *wieviele* Cuts ein
+   Clip liefert (aus dem Beat-Grid), `spread_windows()` verteilt sie über den
+   ganzen Clip, und `quality.plan_windows()` verschiebt oder verwirft sie nach
+   Bildqualität. Cuts unter `target_min` werden verworfen. Anschließend
+   gruppiert `run()` das Material nach Aufnahmetag und ruft für jede Gruppe
    `export_reel()` auf.
-3. **`styling.py`** – `center_crop_resize()` beschneidet auf exakt 9:16,
+3. **`quality.py`** – ein ffmpeg-Durchlauf pro Rohclip liefert einen
+   Graustufen-Strip (4 fps, 90 px hoch). Daraus werden Schärfe, Luma,
+   Schwarz-/Weißanteil und eine 16×16-Signatur pro Frame berechnet – und
+   zwischengespeichert, sodass wiederholte Läufe nichts neu dekodieren.
+4. **`styling.py`** – `center_crop_resize()` beschneidet auf exakt 9:16,
    `make_grader()` legt die LUT und die Farbstufe auf jeden Frame,
    `build_text_overlay()` rendert Titel/Unterzeile rechtsbündig mit Shadow.
-4. **Export** – `write_videofile()` mit `libx264`, `yuv420p`, 30 fps,
+5. **Export** – `write_videofile()` mit `libx264`, `yuv420p`, 30 fps,
    `audio=False`; danach das Cover via `ffmpeg -ss 0.5`.
 
 ## Fehlerbehandlung
@@ -300,6 +348,8 @@ tenor/
 | Kein Spotify-Key / Track nicht gefunden | Stille auf den BPM-Fallback, kein Abbruch |
 | Nominatim nicht erreichbar | Negativ gecacht, Lauf läuft ohne Ortsangabe weiter |
 | Kein Font ladbar | Pillow-Defaultfont als letzte Instanz |
+| Qualitätsanalyse schlägt fehl (ffmpeg, Timeout, kaputte Datei) | Gate wird für den Clip übersprungen, **kein Material geht verloren** |
+| Durchgefallenes Fenster lässt sich nicht retten | Unsauberes Bild wird behalten (`quality.keep_imperfect`), echte Wiederholung verworfen (`quality.drop_duplicates`) |
 | Export abbruch | `*.part.mp4` wird gelöscht, kein unfertiges Ergebnis |
 | Ereignisse während des Schreibens | Debounce wartet auf stabile Dateigröße (max. 6× Debounce) |
 | Batch-Lauf scheitert komplett | Dateien bleiben liegen, Retry nach `watcher.retry_backoff` (Standard 5 min), max. `retry_limit` Versuche |
@@ -337,6 +387,19 @@ bleibt stumm, die Musik kommt in Instagram dazu.
 Die Tests decken vor allem die Fehler ab, die im Betrieb still gescheitert
 sind: der Event-Handler, der den inotify-Thread killte, die State-Datei,
 BPM-Fallback und die Cut-Positionen.
+
+`tests/test_quality.py` sichert zusätzlich die Dinge ab, die am echten
+Material *kalibriert* und nicht hergeleitet sind:
+
+- dass `quality.duplicate_threshold` in der gemessenen Lücke liegt
+  (Burst 6,8–13,9 und zwei Cuts aus demselben Shot 7,4–8,0 fallen durch,
+  verschiedene Szenen ab 24,7 bleiben)
+- dass das Gate nie Material verliert, das es nicht beurteilen kann
+  (kaputte Datei, Timeout, fehlendes ffmpeg, deaktiviertes Gate)
+- dass die Fenster sich nie überlappen und nie über das Clip-Ende hinaus
+  geplant werden, und dass ein einzelner Cut aus einem 3-s-Clip weiterhin
+  zentriert bei 0,75–2,25 s liegt
+
 
 ## Exit-Codes
 

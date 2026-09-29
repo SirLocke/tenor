@@ -64,6 +64,50 @@ cut:
 text_on_first_cuts: 2
 
 # =============================================================================
+# Bildqualitäts-Gate für die Cut-Auswahl
+# -----------------------------------------------------------------------------
+# Ohne diese Prüfung landen im Reel genauso schwarze Frames, verwackelte
+# Schwenks und - bei iPhone-Bursts - dieselben Momente mehrfach. Vor dem
+# Rendern wird pro Rohclip ein Graustufen-Strip gezogen (ein ffmpeg-Durchlauf,
+# Ergebnis zwischengespeichert) und jedes geplante Cut-Fenster damit bewertet.
+# Durchgefallene Fenster werden verschoben, echte Wiederholungen verworfen.
+#
+# Die Zahlenwerte sind an echten 4K-iPhone-Clips ausgemessen, nicht geraten:
+# Schärfe (Laplacian-Varianz) liegt dort bei 3 300-35 000, Luma bei 99-187.
+# Die Grenzen stehen bewusst weit daneben, damit gutes Material nie durchfällt.
+# quality.enabled: false schaltet das Gate vollständig ab.
+# =============================================================================
+quality:
+  enabled: true
+  sample_fps: 4.0        # Abtastrate des Strips (Frames/Sekunde)
+  edge_trim: 0.25        # erste/letzte Viertelsekunde eines Clips aussparen
+  # Lokale Kriterien. Untergrenzen mit 0 sind aus; bei max_luma/max_*_ratio
+  # ist der ausgeschaltete Wert 255 bzw. 1.0.
+  min_sharpness: 2500    # Laplacian-Varianz; fängt unscharfe Frames
+  min_luma: 35           # schwarze Frames (wird VOR dem Grading gemessen)
+  max_luma: 242          # ausgebrannte Himmel
+  max_black_ratio: 0.35  # Anteil reiner Schwarz-Pixel
+  max_white_ratio: 0.25  # ausgefressene Flächen
+  # Mittlere absolute Differenz zweier 16x16-Bildsignaturen. An der echten
+  # Schnittplanung der Madeira-Clips gemessen (15 Cuts, Vergleich gegen die
+  # drei vorherigen):
+  #   gleicher Moment, andere Datei (iPhone-Burst)   6,8 - 13,9
+  #   zwei Cuts aus demselben statischen Clip        7,4 -  8,0
+  #   verschiedene Clips / verschiedene Szenen      24,7 - 104,6
+  # Beide unteren Gruppen sind echte Wiederholungen, 20 liegt in der Lücke.
+  # 0 schaltet die Wiederholungsprüfung ab.
+  duplicate_threshold: 20
+  # Gegen wie viele zuletzt gezeigte Cuts verglichen wird. 1 erkennt nur
+  # direkte Nachbarschaft, 3 auch das A-B-A-Muster.
+  duplicate_memory: 3
+  # Sekunden, um die ein durchgefallenes Fenster verschoben wird (Reihenfolge).
+  search_offsets: [0.3, -0.3, 0.6, -0.6, 0.9, -0.9]
+  # Was passiert, wenn auch alle Varianten durchfallen:
+  drop_duplicates: true  # echte Wiederholung verwerfen
+  keep_imperfect: true   # unsauberes Bild behalten (weiches Bild schlägt Lücke)
+  cache_dir: /srv/nas/Nils/video-cut/.cache/quality
+
+# =============================================================================
 # Dark-Film Grading ("Moody Cinematic Look")
 # =============================================================================
 style:
