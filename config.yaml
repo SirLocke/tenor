@@ -114,11 +114,11 @@ quality:
 style:
   preset: natural          # Standard: dezent & natürlich (lebendige Farben, tiefe Schwarztöne)
   gamma: 1.0               # 1.0 = natürliche neutrale Belichtung
-  contrast: 0.08           # dezente organische S-Kurve für Kontrast
+  contrast: 0.02           # minimaler natürlicher Mikrokontrast
   black_lift: 0.0          # 0.0 = echte, tiefe Schwarztöne (kein milchiger Schleier)
   black_toe: 1.0           # Auslaufkurve
-  highlight_ceiling: 0.99  # sanfte Begrenzung harter Spitzen
-  saturation: 1.02         # natürliche Farbsättigung erhalten
+  highlight_ceiling: 1.0   # 1.0 = keine Lichter-Kompression (reines Weiß bleibt weiß)
+  saturation: 1.03         # natürliche, frische iPhone-Farben
   shadow_desaturate: 0.0   # Schattenfarbe nicht entsättigen
   teal_red: 0.0            # keine Farbverfälschung
   teal_green: 0.0

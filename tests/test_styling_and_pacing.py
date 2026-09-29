@@ -14,8 +14,9 @@ class TestGradePresets:
         grade = GradeConfig()
         assert grade.preset == "natural"
         assert grade.black_lift == 0.0  # kein milchiger Schleier
-        assert grade.contrast == 0.08  # dezenter Kontrast
-        assert grade.saturation == 1.02  # frische, lebendige Farben
+        assert grade.contrast == 0.02  # minimaler dezenter Mikrokontrast
+        assert grade.saturation == 1.03  # frische, lebendige Farben
+        assert grade.highlight_ceiling == 1.0  # keine Lichterkompression / kein Vergrauen
         assert grade.gamma == 1.0
         assert not grade.is_identity
 

@@ -58,11 +58,11 @@ FONT_URLS: dict[str, tuple[tuple[str, float | None], ...]] = {
 GRADE_PRESETS: dict[str, dict[str, float]] = {
     "natural": {
         "gamma": 1.0,
-        "contrast": 0.08,
+        "contrast": 0.02,
         "black_lift": 0.0,
         "black_toe": 1.0,
-        "highlight_ceiling": 0.99,
-        "saturation": 1.02,
+        "highlight_ceiling": 1.0,
+        "saturation": 1.03,
         "shadow_desaturate": 0.0,
         "teal_red": 0.0,
         "teal_green": 0.0,
@@ -109,11 +109,11 @@ class GradeConfig:
     """Color-Grading-Parameter, eingelesen aus ``style:`` in der config.yaml."""
 
     gamma: float = 1.0
-    contrast: float = 0.08
+    contrast: float = 0.02
     black_lift: float = 0.0
     black_toe: float = 1.0
-    highlight_ceiling: float = 0.99
-    saturation: float = 1.02
+    highlight_ceiling: float = 1.0
+    saturation: float = 1.03
     shadow_desaturate: float = 0.0
     teal_red: float = 0.0
     teal_green: float = 0.0
