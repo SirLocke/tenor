@@ -15,17 +15,31 @@ WorkingDirectory=%h/video-cut
 # Venv-Interpreter: nutzt die gepinnten Pakete aus requirements.txt
 ExecStart=%h/video-cut/.venv/bin/python -m src.watcher --config %h/video-cut/config.yaml
 
-# Ingest-Watcher beendet sich bei SIGTERM sauber (flushed den State).
+# Der Watcher beendet sich bei SIGTERM innerhalb weniger Sekunden. Der
+# laufende Render wird dabei verworfen; die Rohclips bleiben im Ingest und
+# werden beim nächsten Start neu verarbeitet (State wird erst nach Erfolg
+# geschrieben), unfertige .part-Dateien räumt cleanup_partials() weg.
 KillSignal=SIGTERM
-TimeoutStopSec=30
+TimeoutStopSec=120
 
-# Neustartverhalten
-Restart=on-failure
+# Neustartverhalten. "always" statt "on-failure": ein sauber beendeter Lauf
+# (--once) ist kein Fehler, ein hängender aber auch kein Absturz - mit
+# "always" kommt der Dienst in jedem Zweifelsfall wieder hoch.
+Restart=always
 RestartSec=10
+
+# Speicher-Obergrenze. Ein 5-minütiger 4K-Burst kann sonst den Server in den
+# Swap zwingen (real beobachtet: 6,4 GB Peak bei 10 Clips).
+MemoryMax=2G
+MemoryHigh=1500M
 
 # Umgebung
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONFAULTHANDLER=1
+# Optionale Spotify-Zugangsdaten. Datei anlegen mit:
+#   printf 'SPOTIFY_CLIENT_ID=...\nSPOTIFY_CLIENT_SECRET=...\n' > ~/.config/tenor/spotify.env
+#   chmod 600 ~/.config/tenor/spotify.env
+EnvironmentFile=-%h/.config/tenor/spotify.env
 
 # Der Rendervorgang ist CPU-, nicht I/O-lastig: etwas zurückhaltend einplanen,
 # damit der Server responsiv bleibt.

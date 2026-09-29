@@ -521,16 +521,24 @@ def collect_clips(
     geocoder: Geocoder | None = None,
     recursive: bool = False,
     ignore_dirs: Sequence[str] = (),
+    extensions: Sequence[str] = (".mov", ".mp4", ".m4v", ".hevc", ".h265"),
 ) -> list[ClipInfo]:
-    """Sammelt Clips aus Dateien und/oder Verzeichnissen, chronologisch sortiert."""
+    """Sammelt Clips aus Dateien und/oder Verzeichnissen, chronologisch sortiert.
+
+    ``extensions`` kommt bewusst vom Aufrufer: der Watcher filtert nach
+    ``config.yaml``, und die CLI soll sich genauso verhalten.
+    """
+    wanted = tuple(e.lower() if e.startswith(".") else f".{e.lower()}" for e in extensions)
     files: list[Path] = []
     for source in sources:
         path = Path(source).expanduser()
         if path.is_dir():
-            extensions = (".mov", ".mp4", ".m4v", ".hevc", ".h265")
-            files.extend(iter_media_files(path, extensions, recursive=recursive, ignore_dirs=ignore_dirs))
+            files.extend(iter_media_files(path, wanted, recursive=recursive, ignore_dirs=ignore_dirs))
         elif path.exists():
-            files.append(path)
+            if path.suffix.lower() in wanted:
+                files.append(path)
+            else:
+                log.warning("Unbekannte Endung, wird übersprungen: %s", path.name)
         else:
             log.warning("Quelle existiert nicht, wird übersprungen: %s", path)
 

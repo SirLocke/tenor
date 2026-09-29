@@ -45,9 +45,23 @@ cut:
   target_min: 1.4      # kürzester Cut (Sekunden)
   target_max: 2.0      # längster Cut (Sekunden)
   target: 1.7          # Wunsch-Cutlänge, bestimmt Beat-Gruppierung
-  fallback_interval: 1.8   # ohne Musik / bei Beat-Fehler
+  # Ohne Musik/Spotify wird ein künstliches Beat-Grid aus fallback_bpm gebaut:
+  # Beats = 60/fallback_bpm, gruppiert auf ~target. 120 BPM -> 0,5s Beats,
+  # Gruppe 3 -> 1,5s Cuts (passt in target_min..target_max).
+  fallback_bpm: 120
+  # fallback_interval ist nur der Notfall-Takt, wenn weder BPM noch Musik
+  # verwertbar sind (z. B. fallback_bpm: 0).
+  fallback_interval: 1.8
   max_cuts: 0          # 0 = unlimited, sonst harte Obergrenze pro Reel
   max_per_clip: 0      # 0 = unlimited, sonst max. Cuts aus derselben Datei
+
+# =============================================================================
+# Text-Overlay
+# =============================================================================
+# Auf wie vielen der ersten Cuts steht der Text? Instagram-Reels-Konvention:
+# der Hook trägt die Beschriftung, der Rest bleibt clean, damit der Blick
+# auf das Bild fällt. 0 = Text auf allen Cuts.
+text_on_first_cuts: 2
 
 # =============================================================================
 # Dark-Film Grading ("Moody Cinematic Look")
@@ -123,6 +137,11 @@ watcher:
   process_existing_on_start: true   # beim Start bereits liegende Clips einlesen
   delete_after: false      # Rohclips nach erfolgreichem Export löschen
   min_clip_duration: 0.6   # kürzere Dateien überspringen
+  # Ein fehlgeschlagener Batch bleibt liegen und wird erneut versucht - sonst
+  # ginge das Material bei einem transienten Fehler (ffmpeg-OOM, NAS-Aussetzer)
+  # bis zum nächsten Neustart verloren.
+  retry_limit: 3           # Versuche pro Datei, danach aufgeben
+  retry_backoff: 300       # Sekunden Wartezeit zwischen den Versuchen
 
 # =============================================================================
 # Nextcloud Auto-Scan (optional)
@@ -146,15 +165,24 @@ nextcloud:
 # =============================================================================
 spotify:
   enabled: false
-  # Fallback BPM für bekannte Songs (falls Spotify nicht konfiguriert/Track nicht gefunden).
-  # Format: "artist - title": BPM
-  # Diese dienen als Fallback, wenn kein Spotify-Key oder Track nicht gefunden.
+  # Track, an dessen Beats geschnitten wird. URI oder URL, z. B.
+  #   track_uri: "spotify:track:4cOdK2wGLETKBW3PvgPWqT"
+  # Alternativ auf der CLI: python -m src.pipeline -m "spotify:track:<ID>"
+  track_uri: ""
+  # Wird nur benutzt, wenn weder Spotify noch eine MP3 im music_dir vorliegt.
+  default_bpm: 120
+  # Zuordnung Name/Schlüsselwort -> BPM. Der Schlüssel "default" gewinnt, wenn
+  # nichts spezieller passt - ohne ihn wäre die YAML-Reihenfolge entscheidend.
+  # Ein Treffer über den Musik-Namen gewinnt vor "default".
   fallback_bpm:
-    "generic - pop": 120
-    "generic - edm": 128
-    "generic - hiphop": 90
-    "generic - rock": 110
-    "generic - slow": 80
+    "default": 120
+    "pop": 120
+    "edm": 128
+    "hiphop": 90
+    "rock": 110
+    "reggae": 80
+    "house": 124
+    "techno": 132
 
 naming:
   # Dateiname innerhalb des Zielordners

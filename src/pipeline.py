@@ -32,7 +32,6 @@ from . import (
     slugify,
 )
 from .metadata import ClipInfo, Geocoder, collect_clips, dominant_place, primary_place
-from .spotify_beats import fetch_spotify_beats
 from .styling import (
     GradeConfig,
     build_subtitle,
@@ -141,6 +140,29 @@ def detect_beat_durations(music: Path, cut_cfg: Mapping[str, Any]) -> list[float
     return durations
 
 
+def durations_from_bpm(bpm: float, cut_cfg: Mapping[str, Any]) -> list[float]:
+    """Erzeugt ein Beat-Grid aus einem reinen BPM-Wert.
+
+    Wird benutzt, wenn keine echte Audio-Datei und keine Spotify-Beats
+    vorliegen. Gruppiert den Beat-Takt auf ``cut.target`` (1,4-2,0 s), damit
+    die Schnitte auf echte Takte fallen statt auf beliebige Intervalle.
+    """
+    t_min = float(cut_cfg.get("target_min", 1.4))
+    t_max = float(cut_cfg.get("target_max", 2.0))
+    target = float(cut_cfg.get("target", (t_min + t_max) / 2))
+    target = min(max(target, t_min), t_max)
+    if not isinstance(bpm, (int, float)) or isinstance(bpm, bool):
+        return []
+    if not math.isfinite(float(bpm)) or bpm <= 0:
+        return []
+    beat = 60.0 / bpm
+    group = max(1, int(round(target / beat)))
+    span = min(max(beat * group, t_min), t_max)
+    # Ein 2-Takt-Loop klingt rhythmisch, ein 1-Takt wirkt wie Zufall.
+    reps = 2 if span * 2 <= t_max + t_min else 1
+    return [span] * reps
+
+
 def _iter_durations(durations: Sequence[float], fallback: float, limit: int = 0) -> Iterator[float]:
     """Endloser Iterator über Cut-Längen (Beat-Grid, sonst fester Takt)."""
     pool = list(durations) if durations else []
@@ -242,6 +264,28 @@ def build_segments(
 # --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
+def probe_duration(path: Path) -> float | None:
+    """Dauer einer fertigen Datei in Sekunden, oder ``None``.
+
+    Genauer als der Schnittplan, wenn einzelne Cuts ausgefallen sind.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "format=duration",
+                "-of", "default=nw=1:nk=1", str(path),
+            ],
+            capture_output=True,
+            timeout=15,
+            check=True,
+        )
+        value = float(result.stdout.decode().strip())
+        return value if math.isfinite(value) and value > 0 else None
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return None
+
+
 def _open_source(path: Path) -> Any:
     """Öffnet eine Videoquelle; beschädigte Dateien werfen eine lesbare Exception.
 
@@ -252,39 +296,71 @@ def _open_source(path: Path) -> Any:
     import subprocess
     from moviepy import VideoFileClip
 
+    def _validated(clip: Any) -> Any:
+        """Größenprüfung - der Reader ist ab hier schon offen (ffmpeg läuft)."""
+        size = clip.size
+        if size is None or size[0] < 2 or size[1] < 2:
+            raise ValueError(f"ungültige Bildgröße {size}")
+        return clip
+
     # Prüfen ob 10-Bit-HEVC -> dann nach 8-Bit transkodieren
     probe_cmd = [
         "ffprobe", "-v", "error", "-select_streams", "v:0",
         "-show_entries", "stream=pix_fmt,codec_name",
         "-of", "csv=p=0", str(path)
     ]
+    tmp_path: Path | None = None
     try:
         result = subprocess.run(probe_cmd, capture_output=True, timeout=10, check=True)
         out = result.stdout.decode().strip()
         if "yuv420p10le" in out or "p010le" in out:
             # 10-Bit -> temporär nach 8-Bit transkodieren
-            tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-            tmp.close()
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
             transcode_cmd = [
                 "ffmpeg", "-v", "error", "-y",
                 "-i", str(path),
                 "-pix_fmt", "yuv420p",
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
                 "-an",  # Audio weg (Pipeline exportiert stumm)
-                tmp.name
+                str(tmp_path),
             ]
             subprocess.run(transcode_cmd, timeout=120, check=True)
-            clip = VideoFileClip(tmp.name, audio=False)
-            # Temporäre Datei beim Schließen löschen
-            clip.close = lambda: (VideoFileClip.close(clip), __import__("os").unlink(tmp.name))
+            clip = _validated(VideoFileClip(str(tmp_path), audio=False))
+            original_close = clip.close
+            scratch = tmp_path
+
+            def close_and_cleanup(_close: Any = original_close, _tmp: Path = scratch) -> None:
+                try:
+                    _close()
+                finally:
+                    _tmp.unlink(missing_ok=True)
+
+            clip.close = close_and_cleanup
             return clip
     except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
-        pass  # Fallback: normal öffnen
+        # WICHTIG: bei jedem Fehlschlag das Zwischenfile löschen. moviepy
+        # räumt nichts auf (Clip.__del__ ist absichtlich ein no-op), sonst
+        # wächst /tmp bei jeder kaputten Datei um ein Vielfaches.
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+            tmp_path = None
+    except Exception:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+            tmp_path = None
+        raise
 
     clip = VideoFileClip(str(path), audio=False)
-    if clip.size is None or clip.size[0] < 2 or clip.size[1] < 2:
-        raise ValueError(f"ungültige Bildgröße {clip.size}")
-    return clip
+    try:
+        return _validated(clip)
+    except Exception:
+        # Reader (und damit der ffmpeg-Kindprozess) ist schon offen.
+        try:
+            clip.close()
+        except Exception:  # pragma: no cover
+            pass
+        raise
 
 
 def build_segment_clip(
@@ -311,13 +387,21 @@ def build_segment_clip(
         sources.append(source)
 
     source_duration = float(source.duration or 0.0)
+    frame = 1.0 / fps
     start = max(min(segment.start, max(source_duration - 0.05, 0.0)), 0.0)
-    end = max(min(segment.end, source_duration), start + 1.0 / fps)
+    # Obergrenze gewinnt: das min()-Clamp darf NICHT von einem
+    # start+frame-Floor überstimmt werden, sonst liest subclipped über EOF.
+    end = min(segment.end, source_duration)
+    if end <= start:
+        raise ValueError(
+            f"Cut {segment.start:.2f}-{segment.end:.2f}s liegt außerhalb von "
+            f"{segment.clip.name} (Dauer {source_duration:.2f}s)"
+        )
+    end = max(end, min(start + frame, source_duration))
     piece = source.subclipped(start, end)
-    piece = piece.with_duration(max(end - start, 1.0 / fps))
+    piece = piece.with_duration(max(end - start, frame))
 
     piece = center_crop_resize(piece, width, height)
-    piece = piece.with_fps(fps)
     piece = piece.image_transform(make_grader(grade))
 
     if overlay_png is not None:
@@ -332,6 +416,7 @@ def render_segments(
     *,
     grade: GradeConfig,
     overlay_png: Any,
+    text_on_first_cuts: int = 0,
     on_error: list[str] | None = None,
 ) -> list[Any]:
     """Rendert alle Cuts. Fehlerhafte Clips werden übersprungen, nicht abgebrochen."""
@@ -346,11 +431,16 @@ def render_segments(
 
     for index, segment in enumerate(segments, start=1):
         try:
+            # Text-Overlay nur auf den ersten N Cuts (Instagram-Reels-Konvention:
+            # der Hook trägt die Beschriftung, der Rest bleibt clean).
+            segment_overlay = overlay_png
+            if text_on_first_cuts > 0 and index > text_on_first_cuts:
+                segment_overlay = None
             clip = build_segment_clip(
                 segment,
                 cfg,
                 grade,
-                overlay_png,
+                segment_overlay,
                 fps=fps,
                 width=width,
                 height=height,
@@ -367,20 +457,28 @@ def render_segments(
                 segment.duration,
             )
         except Exception as exc:
+            # Nur der fehlgeschlagene Cut wird verworfen. Die bereits
+            # gerenderten Cuts bleiben erhalten - sonst hätte das Reel vorn
+            # ein Loch und der Schnittplan passte nicht zum Ergebnis.
             message = f"Cut {index} aus {segment.clip.name} fehlgeschlagen: {exc}"
             log.error("%s", message)
             failures.append(message)
             _close_all(sources)
             sources = []
-            if rendered:
-                _close_all(rendered)
-                rendered = []
 
     if not rendered:
         _close_all(sources)
         return []
 
-    final = concatenate_videoclips(rendered, method="chain")
+    # concatenate_videoclips kann bei gemischten Größen/fehlerhaften
+    # n_frames werfen. Ohne den finally-Block bleiben dann ALLE geöffneten
+    # Reader (je ein ffmpeg-Prozess) bis zum nächsten GC-Cycle hängen.
+    try:
+        final = concatenate_videoclips(rendered, method="chain")
+    except BaseException:
+        _close_all(sources)
+        _close_all(rendered)
+        raise
     try:
         final = final.without_audio()
     except Exception:  # pragma: no cover
@@ -617,41 +715,121 @@ def _pick_music(music: str | Path | None, cfg: Mapping[str, Any]) -> Path | None
 
 
 def _fetch_spotify_beats(track_uri: str, cfg: Mapping[str, Any]) -> list[float] | None:
-    """Holt Beat-Timestamps von Spotify Audio Analysis."""
+    """Beat-Timestamps von Spotify holen und in Cut-Längen übersetzen.
+
+    Importiert ``spotify_beats`` erst hier, damit die Pipeline auch ohne das
+    optionale Modul startet. Fehler werden geschluckt - der Aufrufer fällt auf
+    den BPM-Takt zurück.
+    """
     spotify_cfg = get(cfg, "spotify", {}) or {}
     if not spotify_cfg.get("enabled"):
         return None
     try:
+        from .spotify_beats import fetch_spotify_beats
+    except ImportError as exc:  # pragma: no cover
+        log.warning("Spotify-Modul nicht verfügbar (%s)", exc)
+        return None
+    try:
         beats = fetch_spotify_beats(track_uri)
-        if beats:
-            # Beats in Intervalle (Dauer zwischen Beats) umwandeln
-            intervals: list[float] = []
-            for i in range(1, len(beats)):
-                intervals.append(beats[i] - beats[i - 1])
-            return intervals
     except Exception as exc:  # pragma: no cover
         log.warning("Spotify Beat-Detection fehlgeschlagen: %s", exc)
-    return None
+        return None
+    if not beats or len(beats) < 3:
+        return None
+
+    # Gleiche Gruppierung wie beim lokalen Beat-Tracking: Beats auf eine
+    # Zylinderlänge von ~target gruppieren, damit Cuts auf Downbeats landen.
+    cut_cfg = get(cfg, "cut", {}) or {}
+    t_min = float(cut_cfg.get("target_min", 1.4))
+    t_max = float(cut_cfg.get("target_max", 2.0))
+    target = min(max(float(cut_cfg.get("target", (t_min + t_max) / 2)), t_min), t_max)
+
+    intervals = [b - a for a, b in zip(beats, beats[1:]) if b - a > 0.05]
+    if not intervals:
+        return None
+    median_beat = float(sorted(intervals)[len(intervals) // 2])
+    group = max(1, int(round(median_beat / target)))
+    durations: list[float] = []
+    for start, end in zip(beats[::group], beats[::group][1:]):
+        span = end - start
+        if span > 0:
+            durations.append(min(max(span, t_min), t_max))
+    log.info(
+        "Spotify-Grid: Beat %.2fs -> Gruppe %d (Cut ~%.2fs)",
+        median_beat,
+        group,
+        median_beat * group,
+    )
+    return durations or None
 
 
 def _get_fallback_bpm(cfg: Mapping[str, Any], music_hint: str | Path | None) -> float:
-    """Ermittelt Fallback-BPM aus Config oder Defaults."""
-    spotify_cfg = get(cfg, "spotify", {}) or {}
-    fallback_map = spotify_cfg.get("fallback_bpm", {}) or {}
+    """Ermittelt den BPM-Wert für den Takt-Fallback.
 
-    # 1. Musik-Hint (Dateiname/URI) gegen Fallback-Map matchen
+    Reihenfolge: expliziter ``cut.fallback_bpm`` -> Treffer im ``fallback_bpm``-Map
+    über den Musik-Hinweis -> generisches ``pop``/``default`` aus der Map ->
+    ``spotify.default_bpm`` -> 120. Ohne den Sentinel-Schritt wäre das Ergebnis
+    von der Reihenfolge der YAML-Keys abhängig.
+    """
+    cut_cfg = get(cfg, "cut", {}) or {}
+    spotify_cfg = get(cfg, "spotify", {}) or {}
+    fallback_map = dict(spotify_cfg.get("fallback_bpm", {}) or {})
+
+    # 1. Hart im cut-Block konfiguriert - gewinnt immer.
+    if "fallback_bpm" in cut_cfg:
+        return _safe_bpm(cut_cfg.get("fallback_bpm"), 120.0)
+
+    def _lookup(name: str) -> float | None:
+        for key, bpm in fallback_map.items():
+            if str(key).strip().lower() == name:
+                try:
+                    return _safe_bpm(bpm, None)
+                except (TypeError, ValueError):
+                    log.warning("Ungültiger BPM-Wert für %r in spotify.fallback_bpm", key)
+                    return None
+        return None
+
+    # 2. Substring-Treffer über den Hinweis (Dateiname/URI).
+    #    Der "default"-Sentinel wird hier übersprungen - er gehört in Schritt 3.
     if music_hint:
         hint = str(music_hint).lower()
-        for key, bpm in fallback_map.items():
-            if key.lower() in hint:
-                return float(bpm)
+        # Spezifischste zuerst: längster passender Schlüssel gewinnt, damit
+        # "pop" nicht den Eintrag "pop remix" verdeckt.
+        matches: list[tuple[int, float]] = []
+        for key, value in fallback_map.items():
+            name = str(key).strip().lower()
+            if name in ("", "default", "*") or name not in hint:
+                continue
+            try:
+                matches.append((len(name), _safe_bpm(value, None)))
+            except (TypeError, ValueError):
+                log.warning("Ungültiger BPM-Wert für %r in spotify.fallback_bpm", key)
+        if matches:
+            return max(matches, key=lambda item: item[0])[1]
 
-    # 2. Ersten Eintrag aus Map nehmen
-    if fallback_map:
-        return float(next(iter(fallback_map.values())))
+    # 3. Expliziter Default in der Map.
+    for sentinel in ("default", "*", "pop"):
+        found = _lookup(sentinel)
+        if found:
+            return found
 
-    # 3. Hardcoded Default (120 BPM = pop standard)
-    return 120.0
+    # 4. spotify.default_bpm, sonst 120 BPM.
+    return _safe_bpm(spotify_cfg.get("default_bpm"), 120.0)
+
+
+def _safe_bpm(value: Any, fallback: float | None) -> float:
+    """BPM-Wert robust lesen; ``0``, ``None`` und Müll landen im Fallback."""
+    try:
+        bpm = float(value)
+    except (TypeError, ValueError):
+        if fallback is None:
+            raise
+        return fallback
+    if not math.isfinite(bpm) or bpm <= 0.0:
+        if fallback is None:
+            raise ValueError(f"ungültiger BPM-Wert: {value!r}")
+        return fallback
+    return bpm
 
 
 def run(
@@ -669,6 +847,14 @@ def run(
 ) -> RenderResult:
     """Kompletter Pipeline-Lauf: Metadaten -> Schnitt -> Render -> Export."""
     cfg = load_config(config_path)
+    # Overrides explizit durchreichen, damit der Watcher nicht darauf angewiesen
+    # ist, dass die Datei auf der Platte schon die richtigen Werte enthält.
+    if output_dir is not None:
+        cfg["output_dir"] = str(output_dir)
+    if no_geocoding:
+        cfg.setdefault("geocoding", {})
+        cfg["geocoding"] = {**cfg["geocoding"], "enabled": False}
+
     video_cfg = get(cfg, "video", {}) or {}
     cut_cfg = get(cfg, "cut", {}) or {}
 
@@ -676,9 +862,6 @@ def run(
     if not sources:
         sources = [str(expand_path(get(cfg, "ingest_dir", ".")))]
 
-    if no_geocoding:
-        cfg.setdefault("geocoding", {})
-        cfg["geocoding"]["enabled"] = False
     geocoder = Geocoder(cfg)
 
     clips = collect_clips(
@@ -686,6 +869,7 @@ def run(
         geocoder=geocoder,
         recursive=bool(get(cfg, "watcher.recursive", False)),
         ignore_dirs=list(get(cfg, "watcher.ignore_dirs", [])),
+        extensions=list(get(cfg, "extensions", [".mov", ".mp4"])),
     )
     geocoder.save_cache()
 
@@ -741,11 +925,17 @@ def run(
                 beat_source = f"spotify:{track_uri}" if durations else "fallback"
 
     if not durations:
-        # Fallback-BPM aus Config nutzen
+        # Reiner BPM-Takt. Wichtig: das Ergebnis muss als durations-Liste
+        # weitergegeben werden - der Log-Text allein steuert nichts.
         fallback_bpm = _get_fallback_bpm(cfg, music)
-        interval = 60.0 / fallback_bpm
-        log.info("Keine Beats verfügbar – Fallback %.0f BPM (%.2fs Takt)", fallback_bpm, interval)
-        beat_source = f"fallback:{fallback_bpm}bpm"
+        durations = durations_from_bpm(fallback_bpm, cut_cfg)
+        log.info(
+            "Keine echten Beats verfügbar - Takt-Fallback %.0f BPM (Beat %.2fs, Cut %.2fs)",
+            fallback_bpm,
+            60.0 / fallback_bpm if fallback_bpm else 0.0,
+            durations[0] if durations else 0.0,
+        )
+        beat_source = f"fallback:{fallback_bpm:g}bpm"
 
     result.beat_source = beat_source
 
@@ -824,6 +1014,7 @@ def run(
             when=now,
             dry_run=dry_run,
             no_cover=no_cover,
+            errors_seen=result.errors,
         )
         if target is None:
             continue
@@ -873,10 +1064,12 @@ def export_reel(
     when: float,
     dry_run: bool = False,
     no_cover: bool = False,
+    errors_seen: list[str] | None = None,
 ) -> Path | None:
     """Rendert und exportiert einen Satz von Cuts als ein Reel.
 
     Gibt den fertigen Pfad zurück, oder ``None`` wenn nichts exportiert wurde.
+    ``errors_seen`` sammelt Cut-Fehler für den maschinenlesbaren Report.
     """
     video_cfg = get(cfg, "video", {}) or {}
 
@@ -902,7 +1095,9 @@ def export_reel(
     stem = build_output_name(cfg, title, when, day)
     suffix = str(get(cfg, "naming.extension", ".mp4") or ".mp4")
     target = unique_path(out_dir, stem, suffix)
-    partial = target.parent / f"{target.stem}.part.mp4"
+    # Staging-Datei trägt dieselbe Endung wie das Ziel, sonst räumt
+    # cleanup_partials() sie nicht mehr auf.
+    partial = target.parent / f"{target.stem}.part{suffix}"
     partial.unlink(missing_ok=True)
 
     try:
@@ -912,11 +1107,18 @@ def export_reel(
         overlay = None
 
     errors: list[str] = []
+    # Text nur auf den ersten N Cuts. 0 = auf allen (Default 2 = Hook only).
+    text_on_first_cuts = int(get(cfg, "text_on_first_cuts", 2) or 0)
+    if text_on_first_cuts > 0 and len(segments) > text_on_first_cuts:
+        log.info(
+            "Text-Overlay nur auf den ersten %d von %d Cuts", text_on_first_cuts, len(segments)
+        )
     rendered = render_segments(
         segments,
         cfg,
         grade=grade,
         overlay_png=overlay,
+        text_on_first_cuts=text_on_first_cuts,
         on_error=errors,
     )
     for message in errors:
@@ -924,8 +1126,10 @@ def export_reel(
 
     if not rendered:
         log.error("Kein Cut konnte gerendert werden - Abbruch ohne Export")
+        errors_seen.extend(errors)
         return None
 
+    errors_seen.extend(errors)
     final = rendered[0]
     ffmpeg_params = ["-pix_fmt", str(video_cfg.get("pixel_format", "yuv420p"))]
     crf = video_cfg.get("crf")
@@ -951,6 +1155,8 @@ def export_reel(
     except Exception as exc:
         log.exception("Export nach %s fehlgeschlagen: %s", partial, exc)
         partial.unlink(missing_ok=True)
+        if errors_seen is not None:
+            errors_seen.append(f"Export fehlgeschlagen: {exc}")
         return None
     except BaseException:
         # SIGTERM/Stromausfall: unfertige Datei nicht liegen lassen
@@ -961,7 +1167,10 @@ def export_reel(
         _close_all(getattr(final, "tenor_sources", []) or [])
 
     partial.replace(target)
-    log.info("Export fertig: %s (%.1fs Video)", target, sum(s.duration for s in segments))
+    # Tatsächliche Dauer aus der fertigen Datei, nicht aus dem Plan: es
+    # können Cuts ausgefallen sein.
+    actual = probe_duration(target) or sum(s.duration for s in segments)
+    log.info("Export fertig: %s (%.1fs Video)", target, actual)
 
     if not no_cover and bool(video_cfg.get("cover", True)):
         write_cover(

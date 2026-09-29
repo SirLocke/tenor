@@ -11,8 +11,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
+import os
+import shutil
 import signal
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -70,9 +74,17 @@ def size_stable(path: Path, checks: int = 2, poll: float = 1.0) -> bool:
     return True
 
 
-def wait_until_stable(path: Path, stable_seconds: float, poll: float = 1.0) -> bool:
-    """Blockiert, bis die Dateigröße ``stable_seconds`` lang stabil ist."""
-    deadline = time.monotonic() + max(stable_seconds, 0.0)
+def wait_until_stable(
+    path: Path, stable_seconds: float, poll: float = 1.0, max_wait: float = 0.0
+) -> bool:
+    """Blockiert, bis die Dateigröße ``stable_seconds`` lang stabil ist.
+
+    ``max_wait`` (Sekunden) setzt eine harte Obergrenze. Ohne sie blieb der
+    Thread bei einer endlos wachsenden Datei für immer hängen - ein Thread
+    pro solcher Datei. ``0`` heißt: unbegrenzt warten (Standard für CLI-Läufe).
+    """
+    start = time.monotonic()
+    hard_deadline = start + max_wait if max_wait > 0 else None
     last_size: int | None = None
     stable_since: float | None = None
 
@@ -92,9 +104,13 @@ def wait_until_stable(path: Path, stable_seconds: float, poll: float = 1.0) -> b
         elif stable_since is not None and now - stable_since >= stable_seconds:
             return True
 
-        if now > deadline + stable_seconds:
-            # Datei wächst noch - weiter warten (harte Obergrenze vermeiden).
-            deadline = now
+        if hard_deadline is not None and now >= hard_deadline:
+            log.warning(
+                "Datei %s wurde nach %.0fs nicht ruhig - wird als unvollständig übersprungen",
+                path.name,
+                max_wait,
+            )
+            return False
         time.sleep(poll)
 
 
@@ -107,6 +123,7 @@ class WatcherState:
 
     path: Path
     processed: dict[str, float] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @classmethod
     def load(cls, path: Path) -> WatcherState:
@@ -114,23 +131,71 @@ class WatcherState:
         try:
             with path.open("r", encoding="utf-8") as fh:
                 data = json.load(fh)
-            if isinstance(data, dict) and isinstance(data.get("processed"), dict):
-                state.processed = {str(k): float(v) for k, v in data["processed"].items()}
         except FileNotFoundError:
-            pass
-        except (OSError, ValueError, TypeError) as exc:
+            return state
+        except (OSError, ValueError) as exc:
+            # Beschädigte State-Datei darf NICHT die ganze Historie kosten -
+            # sonst rendert der Watcher beim nächsten Start alles erneut.
             log.warning("State-Datei nicht lesbar (%s): %s", path, exc)
+            backup = _restore_backup(path)
+            if backup:
+                return backup
+            return state
+
+        raw = data.get("processed") if isinstance(data, dict) else None
+        if not isinstance(raw, dict):
+            log.warning("State-Datei ohne gültigen 'processed'-Block: %s", path)
+            return state
+
+        # Eintrag für Eintrag prüfen: ein einzelner kaputter Wert darf nicht
+        # den ganzen Zustand verwerfen.
+        dropped = 0
+        for key, value in raw.items():
+            try:
+                stamp = float(value)
+            except (TypeError, ValueError):
+                dropped += 1
+                continue
+            if math.isnan(stamp) or math.isinf(stamp):
+                dropped += 1
+                continue
+            state.processed[str(key)] = stamp
+        if dropped:
+            log.warning("%d unbrauchbare State-Einträge übersprungen", dropped)
         return state
 
     def save(self) -> None:
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".tmp")
-            with tmp.open("w", encoding="utf-8") as fh:
-                json.dump({"processed": self.processed}, fh, indent=1, sort_keys=True)
-            tmp.replace(self.path)
-        except OSError as exc:
-            log.warning("State-Datei nicht schreibbar: %s", exc)
+        with self._lock:
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                # Vorherige Fassung sichern, damit eine beim Schreiben
+                # zerstörte Datei nicht still alles verliert.
+                if self.path.is_file():
+                    try:
+                        shutil.copy2(self.path, self.path.with_suffix(".bak"))
+                    except OSError as exc:
+                        log.debug("State-Backup nicht möglich: %s", exc)
+                # Snapshot unter dem Lock, damit json.dump nicht über ein
+                # gleichzeitig mutiertes dict iteriert. Wichtig: KEIN zweites
+                # `with self._lock` hier - threading.Lock ist nicht reentrant
+                # und das würde den Aufrufer blockieren.
+                payload = {"version": 1, "processed": dict(self.processed)}
+                # Eindeutiger tmp-Name: parallele Saves dürfen sich nicht
+                # gegenseitig in dieselbe Datei schreiben.
+                fd, tmp_name = tempfile.mkstemp(
+                    dir=str(self.path.parent), prefix=self.path.name, suffix=".tmp"
+                )
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                        json.dump(payload, fh, indent=1, sort_keys=True)
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                    Path(tmp_name).replace(self.path)
+                except BaseException:
+                    Path(tmp_name).unlink(missing_ok=True)
+                    raise
+            except OSError as exc:
+                log.warning("State-Datei nicht schreibbar: %s", exc)
 
     def key(self, path: Path) -> str:
         return str(path.resolve())
@@ -140,18 +205,45 @@ class WatcherState:
             mtime = path.stat().st_mtime
         except OSError:
             return False
-        known = self.processed.get(self.key(path))
+        with self._lock:
+            known = self.processed.get(self.key(path))
         return known is not None and abs(known - mtime) < 1e-6
 
     def mark(self, path: Path) -> None:
         try:
-            self.processed[self.key(path)] = path.stat().st_mtime
+            stamp = path.stat().st_mtime
         except OSError:
             return
-        # State nicht unbegrenzt wachsen lassen
-        if len(self.processed) > 5000:
-            for stale in sorted(self.processed.items(), key=lambda item: item[1])[:1000]:
-                self.processed.pop(stale[0], None)
+        with self._lock:
+            self.processed[self.key(path)] = stamp
+            # State nicht unbegrenzt wachsen lassen
+            if len(self.processed) > 5000:
+                for stale in sorted(self.processed.items(), key=lambda item: item[1])[:1000]:
+                    self.processed.pop(stale[0], None)
+
+
+def _restore_backup(path: Path) -> "WatcherState | None":
+    """Lädt die ``.bak``-Fassung, falls die Hauptdatei unlesbar ist."""
+    backup = path.with_suffix(".bak")
+    if not backup.is_file():
+        return None
+    try:
+        with backup.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        log.warning("Auch das State-Backup ist unbrauchbar: %s", exc)
+        return None
+    raw = data.get("processed") if isinstance(data, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    state = WatcherState(path=path)
+    state.processed = {
+        str(k): float(v)
+        for k, v in raw.items()
+        if isinstance(v, (int, float)) and math.isfinite(float(v))
+    }
+    log.warning("State aus Backup wiederhergestellt (%d Einträge)", len(state.processed))
+    return state
 
 
 # --------------------------------------------------------------------------- #
@@ -170,13 +262,24 @@ class IngestProcessor:
         self.delete_after = bool(get(cfg, "watcher.delete_after", False))
         self.recursive = bool(get(cfg, "watcher.recursive", False))
         self.ignore_dirs = list(get(cfg, "watcher.ignore_dirs", []))
+        # Neufehlgeschlagene Batches: nach N Fehlversuchen beim nächsten
+        # Rescan erneut versuchen, statt sie endgültig zu verlieren.
+        self.retry_limit = max(int(get(cfg, "watcher.retry_limit", 3) or 0), 0)
+        self.retry_backoff = max(float(get(cfg, "watcher.retry_backoff", 300) or 0), 0.0)
         self.output_dir = expand_path(get(cfg, "output_dir", "output"))
         state_dir = self.output_dir.parent if self.output_dir.name else self.output_dir
         self.state = WatcherState.load(state_dir / STATE_FILENAME)
         self._pending: set[Path] = set()
+        self._inflight: set[Path] = set()
+        self._failures: dict[str, int] = {}
+        self._failed_at: dict[str, float] = {}
         self._last_added: float = 0.0
         self._lock = threading.Lock()
         self._collect_lock = threading.Lock()
+        # Deckte den RENDER ab, nicht nur das Einsammeln. Ohne das rendern
+        # zwei eingetroffene Bursts parallel, was State-Datei und
+        # .part-Dateien gegeneinander arbeiten ließ.
+        self._render_lock = threading.Lock()
         self._stop = threading.Event()
 
     # -- Ereignisse ------------------------------------------------------- #
@@ -191,7 +294,7 @@ class IngestProcessor:
         except Exception as exc:  # pragma: no cover
             log.debug("State-Prüfung fehlgeschlagen (%s): %s", path, exc)
         with self._lock:
-            if path in self._pending:
+            if path in self._pending or path in self._inflight:
                 return
             self._pending.add(path)
             self._last_added = time.monotonic()
@@ -206,7 +309,9 @@ class IngestProcessor:
         """
         if self._stop.is_set():
             return
-        if not wait_until_stable(path, self.debounce):
+        # Harte Obergrenze: debounce * 6 reicht für iPhone-Bursts und
+        # verhindert hängende Threads bei endlos wachsenden Dateien.
+        if not wait_until_stable(path, self.debounce, max_wait=self.debounce * 6):
             log.warning("Datei unvollständig oder entfernt, wird übersprungen: %s", path.name)
             with self._lock:
                 self._pending.discard(path)
@@ -219,9 +324,14 @@ class IngestProcessor:
             with self._lock:
                 batch = sorted(self._pending)
                 self._pending.clear()
+                self._inflight.update(batch)
                 self._last_added = 0.0
         if batch:
-            self.process_batch(batch)
+            try:
+                self.process_batch(batch)
+            finally:
+                with self._lock:
+                    self._inflight.difference_update(batch)
 
     def _await_batch_window(self) -> None:
         """Wartet, bis sich im Batch-Fenster nichts Neues mehr tut."""
@@ -242,24 +352,38 @@ class IngestProcessor:
 
     def process_batch(self, batch: Sequence[Path]) -> Any:
         """Übergibt einen Batch an die Pipeline und merkt sich den Erfolg."""
-        files = [p for p in batch if is_media(p, self.extensions) and not self.state.is_processed(p)]
+        files = [
+            p
+            for p in batch
+            if is_media(p, self.extensions)
+            and not self.state.is_processed(p)
+            and self._may_retry(p)
+        ]
         if not files:
             log.info("Keine neuen Dateien im Batch - nichts zu tun")
             return None
 
         log.info("Verarbeite %d Datei(en): %s", len(files), ", ".join(p.name for p in files))
-        try:
-            result = pipeline.run(
-                [str(p) for p in files],
-                config_path=self.config_path,
-                output_dir=self.output_dir,
-                delete_after=self.delete_after,
-            )
-        except Exception as exc:
-            log.exception("Pipeline-Lauf fehlgeschlagen: %s", exc)
-            return None
+        # Render serialisieren: parallele Läufe korumpierten sonst die
+        # State-Datei und löschten sich gegenseitig die .part-Dateien.
+        with self._render_lock:
+            try:
+                result = pipeline.run(
+                    [str(p) for p in files],
+                    config_path=self.config_path,
+                    output_dir=self.output_dir,
+                    delete_after=self.delete_after,
+                )
+            except Exception as exc:
+                log.exception("Pipeline-Lauf fehlgeschlagen: %s", exc)
+                self._note_failure(files)
+                return None
 
         if result.ok:
+            with self._lock:
+                for path in files:
+                    self._failures.pop(self.state.key(path), None)
+                    self._failed_at.pop(self.state.key(path), None)
             for path in files:
                 if not self.delete_after:
                     self.state.mark(path)
@@ -267,8 +391,54 @@ class IngestProcessor:
             for reel in result.outputs or ([result.output] if result.output else []):
                 log.info("Reel geschrieben: %s", reel)
         else:
-            log.error("Kein Export - Dateien bleiben zur späteren Verarbeitung liegen")
+            self._note_failure(files)
         return result
+
+    def _note_failure(self, files: Sequence[Path]) -> None:
+        """Zählt Fehlversuche, damit ein Batch irgendwann aufgegeben wird."""
+        with self._lock:
+            for path in files:
+                key = self.state.key(path)
+                count = self._failures.get(key, 0) + 1
+                self._failures[key] = count
+                self._failed_at[key] = time.monotonic()
+        if not self.retry_limit:
+            log.error("Kein Export - Dateien bleiben zur späteren Verarbeitung liegen")
+            return
+        # Datei von den weiteren Versuchen ausnehmen, aber weiter aufbewahren.
+        with self._lock:
+            retryable = []
+            for path in files:
+                key = self.state.key(path)
+                count = self._failures.get(key, 0)
+                if count >= self.retry_limit:
+                    log.error(
+                        "%s nach %d Fehlversuchen aufgegeben: %s", path.name, count, self._failures.get(key)
+                    )
+                    self._failed_at[key] = 0.0
+                else:
+                    retryable.append(path)
+        log.error(
+            "Kein Export - %d Datei(en) bleiben liegen, %d werden erneut versucht",
+            len(files),
+            len(retryable),
+        )
+
+    def _may_retry(self, path: Path) -> bool:
+        """True, wenn ein gescheiterter Batch frühestens wieder versucht wird."""
+        if not self.retry_limit:
+            return True
+        key = self.state.key(path)
+        with self._lock:
+            count = self._failures.get(key, 0)
+            last = self._failed_at.get(key)
+        if count == 0:
+            return True
+        if count >= self.retry_limit:
+            return False
+        if last is None or self.retry_backoff <= 0:
+            return True
+        return time.monotonic() - last >= self.retry_backoff
 
     def scan_existing(self) -> int:
         """Verarbeitet beim Start bereits vorhandene, unbekannte Clips."""
@@ -287,7 +457,7 @@ class IngestProcessor:
         self._stop.set()
 
     def cleanup_partials(self) -> int:
-        """Entfernt ``*.part.mp4`` aus dem Output - Reste abgebrochener Läufe.
+        """Entfernt ``*.part.<ext>`` aus dem Output - Reste abgebrochener Läufe.
 
         Wird beim Start aufgerufen: nach einem SIGTERM oder einem Stromausfall
         können unfertige Renderdateien liegen bleiben. Sie sind nie gültig
@@ -296,7 +466,8 @@ class IngestProcessor:
         if not self.output_dir.is_dir():
             return 0
         removed = 0
-        for part in self.output_dir.rglob("*.part.mp4"):
+        # Alle Endungen, nicht nur .mp4 - naming.extension ist konfigurierbar.
+        for part in self.output_dir.rglob("*.part.*"):
             try:
                 part.unlink()
                 removed += 1
@@ -312,26 +483,32 @@ class IngestHandler(FileSystemEventHandler):
     def __init__(self, processor: IngestProcessor) -> None:
         self.processor = processor
 
+    def _is_ignored(self, path: Path) -> bool:
+        """True, wenn ``path`` in einem der ``ignore_dirs`` liegt."""
+        ignore = {name.lower() for name in self.processor.ignore_dirs}
+        if not ignore:
+            return False
+        try:
+            parts = {p.lower() for p in path.relative_to(self.processor.ingest_dir).parts}
+        except ValueError:
+            parts = {p.lower() for p in path.parts}
+        return bool(parts & ignore)
+
     def _maybe(self, raw_path: str | bytes) -> None:
+        # WICHTIG: Der ganze Block muss exceptions-sicher sein. Watchdogs
+        # EventDispatcher hat keinen Exception-Guard - eine Exception hier
+        # killt den inotify-Thread und der Watcher taubt für den Rest der
+        # Laufzeit (Prozess lebt weiter, systemd restartet nichts).
         try:
             path = Path(raw_path.decode() if isinstance(raw_path, bytes) else raw_path)
         except (UnicodeDecodeError, ValueError) as exc:  # pragma: no cover
             log.debug("Pfad nicht dekodierbar: %r (%s)", raw_path, exc)
             return
-        # ignore_dirs prüfen (sowohl relativ als auch absolut)
         try:
-            rel = path.relative_to(self.ingest_dir)
-            parts = {p.lower() for p in rel.parts}
-            if any(part in self.ignore_dirs for part in parts):
+            if self._is_ignored(path):
                 return
-        except ValueError:
-            # Pfad nicht unter ingest_dir - auch absoluten Pfad prüfen
-            parts = {p.lower() for p in path.parts}
-            if any(part in self.ignore_dirs for part in parts):
-                return
-        try:
             self.processor.on_file_event(path)
-        except Exception as exc:  # Handler darf den Observer nie killen
+        except Exception as exc:  # Handler darf den Observer NIE killen
             log.exception("Fehler im Event-Handler: %s", exc)
 
     def on_created(self, event: FileSystemEvent) -> None:
@@ -365,26 +542,6 @@ def watch(cfg: Mapping[str, Any], *, config_path: str | None = None, once: bool 
     except Exception as exc:  # pragma: no cover
         log.warning("Aufräumen verwaister Renderdateien fehlgeschlagen: %s", exc)
 
-    if bool(get(cfg, "watcher.process_existing_on_start", True)):
-        try:
-            processor.scan_existing()
-        except Exception as exc:  # pragma: no cover
-            log.exception("Ingest-Scan fehlgeschlagen: %s", exc)
-
-    if once:
-        return 0
-
-    handler = IngestHandler(processor)
-    observer = Observer()
-    observer.schedule(handler, str(ingest_dir), recursive=processor.recursive)
-    observer.start()
-    log.info(
-        "Überwache %s (Debounce %.0fs, Batch-Fenster %.0fs)",
-        ingest_dir,
-        processor.debounce,
-        processor.batch_window,
-    )
-
     stopping = threading.Event()
 
     def _shutdown(signum: int, _frame: Any) -> None:
@@ -398,12 +555,36 @@ def watch(cfg: Mapping[str, Any], *, config_path: str | None = None, once: bool 
         except ValueError:  # pragma: no cover - nicht im Hauptthread
             pass
 
+    handler = IngestHandler(processor)
+    observer = Observer()
+    observer.schedule(handler, str(ingest_dir), recursive=processor.recursive)
+
+    # Observer ZUERST starten, dann scannen. Sonst liegen Dateien, die
+    # während des (minutenlangen) Start-Scans landen, ungehört bis zum
+    # nächsten Neustart.
+    observer.start()
+    log.info(
+        "Überwache %s (Debounce %.0fs, Batch-Fenster %.0fs)",
+        ingest_dir,
+        processor.debounce,
+        processor.batch_window,
+    )
+
     try:
+        if bool(get(cfg, "watcher.process_existing_on_start", True)):
+            try:
+                processor.scan_existing()
+            except Exception as exc:  # pragma: no cover
+                log.exception("Ingest-Scan fehlgeschlagen: %s", exc)
+
+        if once:
+            return 0
+
         while not stopping.is_set():
             stopping.wait(1.0)
     finally:
         observer.stop()
-        observer.join(timeout=10)
+        observer.join(timeout=30)
         log.info("Watcher beendet")
     return 0
 

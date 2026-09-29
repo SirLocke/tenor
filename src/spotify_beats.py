@@ -1,87 +1,211 @@
-"""Spotify Audio Analysis beat detection.
+"""Spotify-Audio-Analysis für Beat-Timestamps.
 
-Requires SPOTIFY_CLIENT_ID + SPOTIFY_CLIENT_SECRET env vars.
-Fetches beat timestamps from Spotify's Audio Analysis endpoint.
+Die Pipeline schneidet still - die Musik kommt später in Instagram dazu. Hier
+werden daher nur die *Beat-Zeitpunkte* eines Spotify-Tracks geholt, nicht die
+Audio-Datei selbst.
+
+Aktivierung: ``SPOTIFY_CLIENT_ID`` und ``SPOTIFY_CLIENT_SECRET`` als
+Environment-Variablen setzen und in ``config.yaml`` unter ``spotify.enabled``
+aktivieren. Fehlt eine der Voraussetzungen, wird sauber auf den BPM-Fallback
+zurückgefallen - die Pipeline läuft dann ohne Spotify weiter.
 """
-import os
-import time
-import logging
-from typing import List
 
-import requests
+from __future__ import annotations
+
+import logging
+import os
+import re
+import threading
+import time
+from typing import Any
 
 log = logging.getLogger("tenor.spotify")
 
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_ANALYSIS_URL = "https://api.spotify.com/v1/audio-analysis/{track_id}"
+SPOTIFY_TRACK_URL = "https://api.spotify.com/v1/tracks/{track_id}"
 
-_token_cache: dict = {"token": None, "expires": 0}
+TRACK_ID_RE = re.compile(r"(?:track[:/]|open\.spotify\.com/track/)([A-Za-z0-9]{22})")
 
 
-def _get_token() -> str | None:
-    """Client-credentials OAuth token (valid ~1 hour)."""
-    now = time.time()
-    if _token_cache["token"] and _token_cache["expires"] > now + 30:
-        return _token_cache["token"]
+class _TokenCache:
+    """Thread-sicherer OAuth-Token-Cache.
 
-    cid = os.getenv("SPOTIFY_CLIENT_ID")
-    secret = os.getenv("SPOTIFY_CLIENT_SECRET")
-    if not cid or not secret:
-        log.warning("SPOTIFY_CLIENT_ID/SECRET nicht gesetzt – Spotify Beat-Detection deaktiviert")
+    Ohne Lock könnten zwei parallele Pipeline-Läufe beide ein Token anfordern
+    und sich gegenseitig mit veralteten Ablaufzeiten überschreiben.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._token: str | None = None
+        self._expires: float = 0.0
+
+    def get(self) -> str | None:
+        with self._lock:
+            if self._token and self._expires > time.time() + 30:
+                return self._token
+            return None
+
+    def set(self, token: str, expires_in: float) -> None:
+        with self._lock:
+            self._token = token
+            self._expires = time.time() + max(expires_in, 60)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._token = None
+            self._expires = 0.0
+
+
+_cache = _TokenCache()
+
+
+def extract_track_id(uri: str) -> str | None:
+    """Track-ID aus URI, URL oder nackter ID ziehen."""
+    match = TRACK_ID_RE.search(uri or "")
+    if match:
+        return match.group(1)
+    bare = re.fullmatch(r"([A-Za-z0-9]{22})", (uri or "").strip())
+    return bare.group(1) if bare else None
+
+
+def _requests() -> Any:
+    """``requests`` erst hier importieren.
+
+    So bleibt ``import src.pipeline`` auch ohne requests möglich - die
+    Abhängigkeit ist nur für Spotify nötig.
+    """
+    try:
+        import requests
+    except ImportError:  # pragma: no cover
+        log.warning("requests fehlt - Spotify Beat-Detection nicht verfügbar")
+        return None
+    return requests
+
+
+def get_token(force: bool = False) -> str | None:
+    """Client-Credentials-Token (gültig ca. 1 Stunde)."""
+    if not force:
+        cached = _cache.get()
+        if cached:
+            return cached
+
+    client_id = os.getenv("SPOTIFY_CLIENT_ID")
+    client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        log.debug("SPOTIFY_CLIENT_ID/SECRET nicht gesetzt - Spotify deaktiviert")
+        return None
+
+    requests = _requests()
+    if requests is None:
         return None
 
     try:
-        r = requests.post(
+        response = requests.post(
             SPOTIFY_TOKEN_URL,
             data={"grant_type": "client_credentials"},
-            auth=(cid, secret),
+            auth=(client_id, client_secret),
             timeout=10,
         )
-        r.raise_for_status()
-        data = r.json()
-        _token_cache["token"] = data["access_token"]
-        _token_cache["expires"] = now + data.get("expires_in", 3600)
-        return _token_cache["token"]
-    except Exception as exc:
-        log.warning("Spotify Token Fehler: %s", exc)
-        return None
-
-
-def _extract_track_id(uri: str) -> str | None:
-    """Extrahiert Track-ID aus Spotify URI/URL."""
-    # spotify:track:4cOdK2wGLETKBW3PvgPWqT
-    # https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT
-    import re
-    m = re.search(r"(?:track[:/])([a-zA-Z0-9]{22})", uri)
-    return m.group(1) if m else None
-
-
-def fetch_spotify_beats(track_uri: str) -> List[float] | None:
-    """Gibt Beat-Startzeiten (Sekunden) aus Spotify Audio Analysis zurück."""
-    token = _get_token()
-    if not token:
-        return None
-
-    track_id = _extract_track_id(track_uri)
-    if not track_id:
-        log.warning("Ungültige Spotify URI: %s", track_uri)
-        return None
-
-    try:
-        r = requests.get(
-            SPOTIFY_ANALYSIS_URL.format(track_id=track_id),
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=15,
-        )
-        if r.status_code == 404:
-            log.warning("Spotify Track nicht gefunden: %s", track_uri)
+        if response.status_code in (400, 401):
+            log.warning("Spotify-Zugangsdaten ungültig (HTTP %s)", response.status_code)
             return None
-        r.raise_for_status()
-        data = r.json()
-        beats = [b["start"] for b in data.get("beats", []) if "start" in b]
-        log.info("Spotify Beats: %d Beats für %s (Tempo ~%.1f BPM)",
-                 len(beats), track_uri, data.get("track", {}).get("tempo", 0))
-        return beats
-    except Exception as exc:
-        log.warning("Spotify Audio Analysis Fehler: %s", exc)
+        response.raise_for_status()
+        data = response.json()
+        token = str(data["access_token"])
+        _cache.set(token, float(data.get("expires_in", 3600)))
+        log.info("Spotify-Token bezogen (gültig %.0f min)", float(data.get("expires_in", 3600)) / 60)
+        return token
+    except Exception as exc:  # Netzwerk, JSON, Timeouts - alles nicht kritisch
+        log.warning("Spotify-Token nicht erhältlich: %s", exc)
         return None
+
+
+def _auth_get(url: str) -> Any | None:
+    """GET mit Bearer-Token, einmaliger Retry bei abgelaufenem Token."""
+    requests = _requests()
+    if requests is None:
+        return None
+    for attempt in (0, 1):
+        token = get_token(force=attempt == 1)
+        if not token:
+            return None
+        try:
+            response = requests.get(
+                url, headers={"Authorization": f"Bearer {token}"}, timeout=20
+            )
+        except Exception as exc:
+            log.warning("Spotify-Anfrage fehlgeschlagen: %s", exc)
+            return None
+        if response.status_code == 401 and attempt == 0:
+            _cache.clear()
+            continue
+        if response.status_code == 404:
+            return None
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After", "?")
+            log.warning("Spotify-Drosselung erreicht (Retry-After=%s)", retry_after)
+            return None
+        if not response.ok:
+            log.warning("Spotify HTTP %s bei %s", response.status_code, url.rsplit("/", 1)[-1])
+            return None
+        try:
+            return response.json()
+        except ValueError as exc:
+            log.warning("Spotify-Antwort kein gültiges JSON: %s", exc)
+            return None
+    return None
+
+
+def track_name(track_uri: str) -> str | None:
+    """``artist - title`` für Logging/Beat-Source."""
+    track_id = extract_track_id(track_uri)
+    if not track_id:
+        return None
+    data = _auth_get(SPOTIFY_TRACK_URL.format(track_id=track_id))
+    if not isinstance(data, dict):
+        return None
+    title = str(data.get("name") or "").strip()
+    artists = data.get("artists") or []
+    names = [str(a.get("name", "")).strip() for a in artists if isinstance(a, dict)]
+    artist = ", ".join(n for n in names if n)
+    return f"{artist} - {title}" if artist and title else (title or None)
+
+
+def fetch_spotify_beats(track_uri: str) -> list[float] | None:
+    """Beat-Startzeiten in Sekunden aus Spotify Audio Analysis."""
+    track_id = extract_track_id(track_uri)
+    if not track_id:
+        log.warning("Ungültige Spotify-Referenz: %r", track_uri)
+        return None
+
+    data = _auth_get(SPOTIFY_ANALYSIS_URL.format(track_id=track_id))
+    if data is None:
+        return None
+
+    raw = data.get("beats") if isinstance(data, dict) else None
+    if not isinstance(raw, list) or not raw:
+        log.warning("Spotify lieferte keine Beats für %s", track_uri)
+        return None
+
+    beats: list[float] = []
+    for entry in raw:
+        try:
+            value = float(entry["start"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if value >= 0.0 and value == value:  # NaN aussortieren
+            beats.append(value)
+    beats.sort()
+
+    tempo = 0.0
+    track = data.get("track") if isinstance(data, dict) else None
+    if isinstance(track, dict):
+        try:
+            tempo = float(track.get("tempo") or 0.0)
+        except (TypeError, ValueError):
+            tempo = 0.0
+    log.info(
+        "Spotify: %d Beats, Tempo ~%.1f BPM für %s", len(beats), tempo, track_uri
+    )
+    return beats or None

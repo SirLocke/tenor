@@ -19,6 +19,11 @@ librosa==1.0.0              # librosa.beat.beat_track
 # --- Metadaten, Geocoding, Konfiguration ---
 geopy==2.5.0                # Reverse-Geocoding via Nominatim
 PyYAML==6.0.3               # config.yaml
+requests>=2.31.0            # Spotify Audio-Analysis (nur bei spotify.enabled)
 
 # --- Ingest-Watcher ---
 watchdog==6.0.0             # inotify-Events auf dem NAS-Mount
+
+# --- Tests / Linting (nur Entwicklung, nicht für den Betrieb) ---
+pytest==9.1.1
+ruff==0.16.9

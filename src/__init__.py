@@ -40,9 +40,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: Vorgabewerte. ``config.yaml`` wird tief in diese Struktur hinein gemergt,
 #: fehlende Keys bleiben dadurch immer befüllt.
 DEFAULTS: dict[str, Any] = {
-    "ingest_dir": "/srv/nas/nils/videos",
-    "output_dir": "/srv/nas/nils/videos/output",
-    "music_dir": "/srv/nas/nils/music",
+    "ingest_dir": "/srv/nas/Nils/video-cut/ingest",
+    "output_dir": "/srv/nas/Nils/video-cut/output",
+    "music_dir": "/srv/nas/Nils/video-cut/music",
     "extensions": [".mov", ".mp4", ".m4v", ".hevc", ".h265"],
     "video": {
         "width": 1080,
@@ -60,9 +60,27 @@ DEFAULTS: dict[str, Any] = {
         "target_min": 1.4,
         "target_max": 2.0,
         "target": 1.7,
+        "fallback_bpm": 120,
         "fallback_interval": 1.8,
         "max_cuts": 0,
         "max_per_clip": 0,
+    },
+    # Text nur auf den ersten N Cuts (0 = alle).
+    "text_on_first_cuts": 2,
+    "spotify": {
+        "enabled": False,
+        "track_uri": "",
+        "default_bpm": 120,
+        "fallback_bpm": {
+            "default": 120,
+            "pop": 120,
+            "edm": 128,
+            "hiphop": 90,
+            "rock": 110,
+            "reggae": 80,
+            "house": 124,
+            "techno": 132,
+        },
     },
     "style": {
         "gamma": 0.93,
@@ -125,6 +143,8 @@ DEFAULTS: dict[str, Any] = {
         "process_existing_on_start": True,
         "delete_after": False,
         "min_clip_duration": 0.6,
+        "retry_limit": 3,
+        "retry_backoff": 300,
     },
     "naming": {
         "template": "{date}_{slug}_{time}",

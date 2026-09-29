@@ -59,28 +59,45 @@ Unterordner.
   verfälschen. ISO-6709-Koordinaten aus den iPhone-Tags werden gelesen.
 - **Reverse-Geocoding** über Nominatim (geopy, 5 s Timeout, eigener
   User-Agent) mit **persistenter Cache-Datei** – pro Koordinate nur eine Anfrage.
-- **Beat-Matching**: `librosa.beat.beat_track` gruppiert Beats zu Downbeats, so
-  dass ein Cut zwischen 1,4 s und 2,0 s liegt. Ohne MP3 greift ein fester
-  Takt (1,8 s).
+- **Beat-Matching** in drei Stufen, automatisch gewählt:
+  1. **Spotify Audio-Analysis** – echte Beat-Timestamps eines Tracks
+     (`spotify.track_uri`, braucht `SPOTIFY_CLIENT_ID`/`SECRET`).
+  2. **MP3 im `music_dir`** – `librosa.beat.beat_track` gruppiert Beats zu
+     Downbeats, so dass ein Cut zwischen 1,4 s und 2,0 s liegt. Es wird die
+     *neueste* MP3 genommen.
+  3. **BPM-Fallback** – `cut.fallback_bpm` (Default 120) erzeugt ein
+     künstliches Beat-Grid: Beat = 60/BPM, gruppiert auf ~`cut.target`.
+     120 BPM ⇒ 0,5 s Beats ⇒ 3er-Gruppe ⇒ 1,5 s Cuts.
+
+  Das Reel wird **stumm** exportiert – die Musik kommt in Instagram dazu.
 - **Dark-Film-Grading** in zwei Stufen: 256er-Tonwertkurve (Gamma, S-Kurve,
   Matte Black Toe, Highlight-Roll-Off) als LUT via OpenCV, danach eine
   Farbstufe (Entsättigung, Cine-Teal in den Schatten, kühle Highlights).
 - **Typografie ohne Box**: rechtsbündig bei `x = 900`, Textgruppe in der
   Safe Zone `y = 1440…1540`, Versalien mit Letter-Spacing, weicher Drop-Shadow
   (Offset 2/2, 70 % Alpha) für Lesbarkeit über hellen Bildstellen.
+  Standardmäßig nur auf den **ersten 2 Cuts** (`text_on_first_cuts: 2`) – der
+  Hook trägt die Beschriftung, der Rest bleibt clean. `0` = auf allen Cuts.
 - **Fehlerisolation**: kaputte Metadaten, nicht lesbare Dateien und
   fehlschlagende Cuts werden geloggt und übersprungen – der Batch-Lauf bricht
-  nie ab.
+  nie ab. Ein fehlgeschlagener Cut wird übersprungen, **die übrigen bleiben
+  im Reel** (kein Loch am Anfang).
 - **Watcher mit Debounce**: eine Datei gilt erst als verarbeitet, wenn ihre
   Größe 5 s unverändert bleibt. Danach wird noch ein Batch-Fenster gesammelt,
-  damit ein iPhone-Burst in *einem* Reel landet.
+  damit ein iPhone-Burst in *einem* Reel landet. Harte Obergrenze 6× Debounce,
+  damit eine endlos wachsende Datei keinen Thread hängen lässt.
+- **Fehlgeschlagene Batches werden wiederholt** (`watcher.retry_limit: 3`,
+  `retry_backoff: 300`) – ein ffmpeg-OOM oder NAS-Aussetzer kostet das
+  Material nicht mehr, es liegt nur 5 min und wird erneut versucht.
 - **Ein Reel pro Tag**: Material aus mehreren Aufnahmetagen wird automatisch
   getrennt, damit im Ordner `2026-09-12/` auch wirklich nur der 12.09. liegt.
 - **Tripname aus dem Ingest-Ordner**: `ingest/Madeira 2026/` ergibt
   `output/Madeira-2026/` – ohne einen Titelparameter überall.
 - **State-Datei** (`.tenor-state.json`) verhindert Doppelverarbeitung nach
-  Neustarts. Verwaiste `*.part.mp4` aus abgebrochenen Läufen werden beim Start
-  entfernt.
+  Neustarts. Schreiben ist atomar (fsync + eindeutige tmp-Datei) und es
+  existiert eine `.bak`-Fassung: eine zerstörte State-Datei kostet nicht
+  die ganze Historie. Verwaiste `*.part.mp4` aus abgebrochenen Läufen
+  werden beim Start entfernt.
 
 ## Installation
 
@@ -237,13 +254,16 @@ tenor/
 ├── .gitignore          # ignoriert .venv, Roh-/Audioformate, Render-Artefakte, Output
 ├── README.md
 ├── requirements.txt    # gepinnte Abhängigkeiten
-├── config.yaml         # Pfade, Grading, Typografie, Watcher
+├── config.yaml         # Pfade, Grading, Typografie, Watcher, Spotify
 ├── src/
 │   ├── __init__.py     # Konfigurations-Infrastruktur (Defaults + Deep-Merge)
 │   ├── pipeline.py     # Beat-Matching, Schnittplan, Rendern, Export, Cover, CLI
 │   ├── metadata.py     # ffprobe, ISO-6709, Reverse-Geocoding, Sortierung, CLI
+│   ├── spotify_beats.py# Spotify Audio-Analysis (optional, thread-sicherer Token-Cache)
 │   ├── styling.py      # LUT-Grading, Center-Crop, Font-Auflösung, Text-Overlay
 │   └── watcher.py      # watchdog-Ingest mit Debounce + Batch-Fenster
+├── tests/
+│   └── test_stability.py  # Regressionstests (47), u. a. gegen den "tauben Watcher"
 └── systemd/
     ├── tenor-watcher.service
     └── tenor-watcher.path
@@ -275,12 +295,48 @@ tenor/
 | Situation | Verhalten |
 | --- | --- |
 | `ffprobe` schlägt fehl / Datei kaputt | Warnung, Datei wird über mtime einsortiert bzw. übersprungen |
-| Clip scheitert beim Rendern | Cut wird verworfen, restliche Cuts rendern weiter |
-| Kein Beat-Grid (Musik zu kurz/leise) | Fallback-Intervall aus `cut.fallback_interval` |
+| Clip scheitert beim Rendern | Nur dieser Cut wird verworfen, restliche Cuts rendern weiter |
+| Kein Beat-Grid (Musik zu kurz/leise) | BPM-Fallback aus `cut.fallback_bpm` (Default 120) |
+| Kein Spotify-Key / Track nicht gefunden | Stille auf den BPM-Fallback, kein Abbruch |
 | Nominatim nicht erreichbar | Negativ gecacht, Lauf läuft ohne Ortsangabe weiter |
 | Kein Font ladbar | Pillow-Defaultfont als letzte Instanz |
 | Export abbruch | `*.part.mp4` wird gelöscht, kein unfertiges Ergebnis |
-| `ResizeObserver`-Ereignisse während des Schreibens | Debounce wartet auf stabile Dateigröße |
+| Ereignisse während des Schreibens | Debounce wartet auf stabile Dateigröße (max. 6× Debounce) |
+| Batch-Lauf scheitert komplett | Dateien bleiben liegen, Retry nach `watcher.retry_backoff` (Standard 5 min), max. `retry_limit` Versuche |
+| State-Datei beschädigt | `.bak`-Fassung wird geladen; notfalls Neuaufbau (dann einmaliges Neurendern) |
+| `MemoryMax` erreicht | systemd killt und startet neu; unfertige `.part`-Dateien werden beim Start entfernt |
+| `SIGTERM` während des Renderns | Lauf verworfen, Clips bleiben im Ingest und werden beim nächsten Start neu verarbeitet |
+
+### Spotify-Beat-Matching (optional)
+
+```bash
+mkdir -p ~/.config/tenor
+printf 'SPOTIFY_CLIENT_ID=...\nSPOTIFY_CLIENT_SECRET=...\n' > ~/.config/tenor/spotify.env
+chmod 600 ~/.config/tenor/spotify.env
+```
+
+In `config.yaml`:
+
+```yaml
+spotify:
+  enabled: true
+  track_uri: "spotify:track:4cOdK2wGLETKBW3PvgPWqT"
+```
+
+Oder einmalig auf der CLI: `python -m src.pipeline -m "spotify:track:<ID>"`.
+Geholt werden nur die Beat-Zeitpunkte, nicht die Audiodatei – das Reel
+bleibt stumm, die Musik kommt in Instagram dazu.
+
+## Tests
+
+```bash
+.venv/bin/python -m pytest tests/ -q
+.venv/bin/python -m ruff check src/ tests/ --select F,E9,E501 --line-length 110
+```
+
+Die Tests decken vor allem die Fehler ab, die im Betrieb still gescheitert
+sind: der Event-Handler, der den inotify-Thread killte, die State-Datei,
+BPM-Fallback und die Cut-Positionen.
 
 ## Exit-Codes
 
