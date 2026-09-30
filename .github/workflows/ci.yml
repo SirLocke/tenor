@@ -61,7 +61,7 @@ jobs:
           with open("/tmp/plan.json") as f:
               data = json.load(f)
           assert data.get("cuts", 0) > 0, "No cuts generated in smoke test!"
-          print(f"✅ Functional pipeline smoke test passed: {data.get(\"cuts\")} cuts, {data.get(\"duration\")}s duration")
+          print(f"✅ Functional pipeline smoke test passed: {data.get('cuts')} cuts, {data.get('duration')}s duration")
           '
           
           rm -f /tmp/tenor_smoke.mov /tmp/plan.json
