@@ -505,6 +505,16 @@ class TestConfig:
     def test_missing_section_uses_dataclass_defaults(self) -> None:
         assert QualityConfig.from_config({}).enabled
 
+    def test_visual_interest_metrics_are_parsed(self) -> None:
+        cfg = QualityConfig.from_config({
+            "min_motion": 5.5,
+            "min_faces": 1.0,
+            "min_color_variance": 12.3
+        })
+        assert cfg.min_motion == 5.5
+        assert cfg.min_faces == 1.0
+        assert cfg.min_color_variance == 12.3
+
     def test_garbage_values_do_not_crash(self) -> None:
         cfg = QualityConfig.from_config(
             {"search_offsets": ["x", None, 0.5, {}], "sample_fps": "nonsense",

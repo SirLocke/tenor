@@ -82,6 +82,10 @@ class QualityConfig:
     max_luma: float = 242.0
     max_black_ratio: float = 0.35
     max_white_ratio: float = 0.25
+    # Neu: Metriken für visuelles Interesse (Bewegung, Gesichter, Farbvarianz).
+    min_motion: float = 0.0
+    min_faces: float = 0.0
+    min_color_variance: float = 0.0
     # Global: mittlere absolute Differenz zweier 16x16-Signaturen (0..255).
     # Kalibriert, nicht geraten - gemessen an der tatsächlichen Schnittplanung
     # der 11 echten Madeira-Clips (15 Cuts, Vergleich gegen die drei
@@ -154,6 +158,9 @@ class QualityConfig:
             max_luma=min(max(number("max_luma", 242.0), 0.0), 255.0),
             max_black_ratio=min(max(number("max_black_ratio", 0.35), 0.0), 1.0),
             max_white_ratio=min(max(number("max_white_ratio", 0.25), 0.0), 1.0),
+            min_motion=max(number("min_motion", 0.0), 0.0),
+            min_faces=max(number("min_faces", 0.0), 0.0),
+            min_color_variance=max(number("min_color_variance", 0.0), 0.0),
             duplicate_threshold=max(number("duplicate_threshold", 20.0), 0.0),
             search_offsets=parsed,
             drop_duplicates=bool(raw.get("drop_duplicates", True)),
@@ -402,6 +409,9 @@ class WindowScore:
     black_ratio: float
     white_ratio: float
     signature: np.ndarray
+    motion: float = 0.0
+    faces: float = 0.0
+    color_variance: float = 0.0
     problems: list[str] = field(default_factory=list)
 
     @property
@@ -413,7 +423,7 @@ def window_score(analysis: ClipAnalysis, start: float, end: float, cfg: QualityC
     """Mittelwerte aller abgetasteten Frames, die in ``[start, end)`` liegen."""
     empty = np.zeros(SIGNATURE_SIZE * SIGNATURE_SIZE, dtype=np.float32)
     if not analysis.usable:
-        return WindowScore(start, end, 0, 0.0, 0.0, 0.0, 0.0, empty, ["keine Analyse"])
+        return WindowScore(start, end, 0, 0.0, 0.0, 0.0, 0.0, empty, problems=["keine Analyse"])
 
     times = analysis.times()
     # Mitte der Frames erwischen: ein Fenster 1.4-2.9s enthält bei 4 fps
@@ -426,6 +436,10 @@ def window_score(analysis: ClipAnalysis, start: float, end: float, cfg: QualityC
         index = int(np.clip(np.searchsorted(times, (start + end) / 2.0), 0, times.size - 1))
         lo, hi = index, index + 1
 
+    motion = float(getattr(analysis, "motion", np.zeros(times.size))[lo:hi].mean()) if hasattr(analysis, "motion") else 0.0
+    faces = float(getattr(analysis, "faces", np.zeros(times.size))[lo:hi].mean()) if hasattr(analysis, "faces") else 0.0
+    color_variance = float(getattr(analysis, "color_variance", np.zeros(times.size))[lo:hi].mean()) if hasattr(analysis, "color_variance") else 0.0
+
     return WindowScore(
         start=start,
         end=end,
@@ -435,23 +449,35 @@ def window_score(analysis: ClipAnalysis, start: float, end: float, cfg: QualityC
         black_ratio=float(analysis.black_ratio[lo:hi].mean()),
         white_ratio=float(analysis.white_ratio[lo:hi].mean()),
         signature=analysis.signatures[lo:hi].mean(axis=0),
+        motion=motion,
+        faces=faces,
+        color_variance=color_variance,
     )
 
 
 def _local_problems(score: WindowScore, cfg: QualityConfig) -> list[str]:
+    problems = []
     if cfg.min_sharpness > 0 and score.sharpness < cfg.min_sharpness:
-        return [f"unscharf (Schärfe {score.sharpness:.0f} < {cfg.min_sharpness:.0f})"]
+        problems.append(f"unscharf (Schärfe {score.sharpness:.0f} < {cfg.min_sharpness:.0f})")
     if cfg.min_luma > 0 and score.luma < cfg.min_luma:
-        return [f"zu dunkel (Luma {score.luma:.0f} < {cfg.min_luma:.0f})"]
+        problems.append(f"zu dunkel (Luma {score.luma:.0f} < {cfg.min_luma:.0f})")
     if cfg.max_luma < 255 and score.luma > cfg.max_luma:
-        return [f"überbelichtet (Luma {score.luma:.0f} > {cfg.max_luma:.0f})"]
+        problems.append(f"überbelichtet (Luma {score.luma:.0f} > {cfg.max_luma:.0f})")
     # Bei Anteilen ist 1,0 (bzw. 255) der ausgeschaltete Wert - mehr als
     # 100 % schwarze Pixel kann es nicht geben.
     if 0 < cfg.max_black_ratio < 1.0 and score.black_ratio > cfg.max_black_ratio:
-        return [f"zu viel Schwarz ({score.black_ratio:.0%})"]
+        problems.append(f"zu viel Schwarz ({score.black_ratio:.0%})")
     if 0 < cfg.max_white_ratio < 1.0 and score.white_ratio > cfg.max_white_ratio:
-        return [f"zu viel Weiß ({score.white_ratio:.0%})"]
-    return []
+        problems.append(f"zu viel Weiß ({score.white_ratio:.0%})")
+
+    if cfg.min_motion > 0 and score.motion < cfg.min_motion:
+        problems.append(f"zu wenig Bewegung ({score.motion:.2f} < {cfg.min_motion:.2f})")
+    if cfg.min_faces > 0 and score.faces < cfg.min_faces:
+        problems.append(f"zu wenig Gesichter ({score.faces:.2f} < {cfg.min_faces:.2f})")
+    if cfg.min_color_variance > 0 and score.color_variance < cfg.min_color_variance:
+        problems.append(f"zu wenig Farbvarianz ({score.color_variance:.2f} < {cfg.min_color_variance:.2f})")
+
+    return problems
 
 
 def signature_distance(first: np.ndarray, second: np.ndarray) -> float:
