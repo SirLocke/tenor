@@ -56,12 +56,12 @@ jobs:
           cat /tmp/plan.json
           
           # Assert cut plan was generated
-          python -c '
+          python -c """
           import json
-          with open("/tmp/plan.json") as f:
+          with open('/tmp/plan.json') as f:
               data = json.load(f)
-          assert data.get("cuts", 0) > 0, "No cuts generated in smoke test!"
-          print(f"✅ Functional pipeline smoke test passed: {data.get('cuts')} cuts, {data.get('duration')}s duration")
-          '
+          assert data.get('cuts', 0) > 0, 'No cuts generated in smoke test!'
+          print('✅ Functional pipeline smoke test passed: {} cuts, {}s duration'.format(data.get('cuts'), data.get('duration')))
+          """
           
           rm -f /tmp/tenor_smoke.mov /tmp/plan.json
