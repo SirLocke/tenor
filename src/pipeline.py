@@ -954,6 +954,7 @@ def run(
     duration: float | None = None,
     grade: str | None = None,
     pace: str | None = None,
+    lossless: bool = False,
 ) -> RenderResult:
     """Kompletter Pipeline-Lauf: Metadaten -> Schnitt -> Render -> Export."""
     cfg = load_config(config_path)
@@ -961,6 +962,9 @@ def run(
     # ist, dass die Datei auf der Platte schon die richtigen Werte enthält.
     if output_dir is not None:
         cfg["output_dir"] = str(output_dir)
+    if lossless:
+        cfg.setdefault("video", {})
+        cfg["video"]["lossless"] = True
     if no_geocoding:
         cfg.setdefault("geocoding", {})
         cfg["geocoding"] = {**cfg["geocoding"], "enabled": False}
@@ -1281,6 +1285,12 @@ def export_reel(
     final = rendered[0]
     ffmpeg_params = ["-pix_fmt", str(video_cfg.get("pixel_format", "yuv420p"))]
     crf = video_cfg.get("crf")
+    preset = str(video_cfg.get("preset", "medium"))
+
+    if video_cfg.get("lossless"):
+        crf = 0
+        preset = "ultrafast"
+
     if crf is not None:
         ffmpeg_params += ["-crf", str(crf)]
     if bool(video_cfg.get("faststart", True)):
@@ -1295,7 +1305,7 @@ def export_reel(
             fps=int(video_cfg.get("fps", 30)),
             codec=str(video_cfg.get("codec", "libx264")),
             audio=bool(video_cfg.get("audio", False)),
-            preset=str(video_cfg.get("preset", "medium")),
+            preset=preset,
             threads=threads or None,
             ffmpeg_params=ffmpeg_params,
             logger=None,
@@ -1401,6 +1411,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dry-run", action="store_true", help="nur Schnittplan ausgeben, kein Export")
     parser.add_argument("--delete-after", action="store_true", help="Rohclips nach Export löschen")
+    parser.add_argument("--lossless", action="store_true", help="verlustfrei exportieren (CRF 0, ultrafast)")
     parser.add_argument("--json", action="store_true", help="Ergebnis als JSON auf stdout")
     parser.add_argument("-q", "--quiet", action="store_true", help="nur Warnungen und Fehler loggen")
     return parser
@@ -1436,6 +1447,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         duration=args.duration,
         grade=args.grade,
         pace=args.pace,
+        lossless=args.lossless,
     )
 
     if args.json:
