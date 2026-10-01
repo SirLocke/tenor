@@ -110,6 +110,26 @@ class QualityConfig:
     cache_dir: str = ".cache/quality"
     timeout: float = 60.0
 
+    def __post_init__(self) -> None:
+        if self.min_sharpness < 0:
+            raise ValueError(f"min_sharpness darf nicht negativ sein (ist {self.min_sharpness})")
+        if self.min_luma < 0:
+            raise ValueError(f"min_luma darf nicht negativ sein (ist {self.min_luma})")
+        if not (0 <= self.max_luma <= 255):
+            raise ValueError(f"max_luma muss zwischen 0 und 255 liegen (ist {self.max_luma})")
+        if not (0 <= self.max_black_ratio <= 1.0):
+            raise ValueError(f"max_black_ratio muss zwischen 0 und 1 liegen (ist {self.max_black_ratio})")
+        if not (0 <= self.max_white_ratio <= 1.0):
+            raise ValueError(f"max_white_ratio muss zwischen 0 und 1 liegen (ist {self.max_white_ratio})")
+        if self.min_motion < 0:
+            raise ValueError(f"min_motion darf nicht negativ sein (ist {self.min_motion})")
+        if self.min_faces < 0:
+            raise ValueError(f"min_faces darf nicht negativ sein (ist {self.min_faces})")
+        if self.min_color_variance < 0:
+            raise ValueError(f"min_color_variance darf nicht negativ sein (ist {self.min_color_variance})")
+        if self.duplicate_threshold < 0:
+            raise ValueError(f"duplicate_threshold darf nicht negativ sein (ist {self.duplicate_threshold})")
+
     @classmethod
     def from_config(cls, cfg: Any) -> "QualityConfig":
         raw = cfg if isinstance(cfg, dict) else {}
