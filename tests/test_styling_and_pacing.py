@@ -10,15 +10,14 @@ from src.styling import GradeConfig, make_grader
 
 
 class TestGradePresets:
-    def test_default_is_natural_and_subtle(self) -> None:
+    def test_default_is_original_and_identity(self) -> None:
         grade = GradeConfig()
-        assert grade.preset == "natural"
-        assert grade.black_lift == 0.0  # kein milchiger Schleier
-        assert grade.contrast == 0.02  # minimaler dezenter Mikrokontrast
-        assert grade.saturation == 1.03  # frische, lebendige Farben
-        assert grade.highlight_ceiling == 1.0  # keine Lichterkompression / kein Vergrauen
-        assert grade.gamma == 1.0
-        assert not grade.is_identity
+        assert grade.preset == "original"
+        assert grade.black_lift == 0.0
+        assert grade.contrast == 0.0
+        assert grade.saturation == 1.0
+        assert grade.highlight_ceiling == 1.0
+        assert grade.is_identity
 
     def test_original_preset_is_identity(self) -> None:
         grade = GradeConfig.from_config({}, preset="original")
