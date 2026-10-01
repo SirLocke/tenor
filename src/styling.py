@@ -109,18 +109,18 @@ class GradeConfig:
     """Color-Grading-Parameter, eingelesen aus ``style:`` in der config.yaml."""
 
     gamma: float = 1.0
-    contrast: float = 0.02
+    contrast: float = 0.0
     black_lift: float = 0.0
     black_toe: float = 1.0
     highlight_ceiling: float = 1.0
-    saturation: float = 1.03
+    saturation: float = 1.0
     shadow_desaturate: float = 0.0
     teal_red: float = 0.0
     teal_green: float = 0.0
     teal_blue: float = 0.0
     highlight_cool: float = 0.0
     skin_damp: float = 0.0
-    preset: str = "natural"
+    preset: str = "original"
 
     @property
     def is_identity(self) -> bool:
@@ -143,8 +143,8 @@ class GradeConfig:
     def from_config(cls, cfg: Mapping[str, Any], preset: str | None = None) -> GradeConfig:
         style = cfg.get("style") if isinstance(cfg.get("style"), Mapping) else {}
         style = style or {}
-        chosen_preset = (preset or str(style.get("preset") or "natural")).lower()
-        base_params = dict(GRADE_PRESETS.get(chosen_preset, GRADE_PRESETS["natural"]))
+        chosen_preset = (preset or str(style.get("preset") or "original")).lower()
+        base_params = dict(GRADE_PRESETS.get(chosen_preset, GRADE_PRESETS["original"]))
         known = {f for f in cls.__dataclass_fields__ if f != "preset"}  # type: ignore[attr-defined]
         for k, v in style.items():
             if k in known and v is not None and preset is None:
@@ -238,7 +238,7 @@ def apply_grade(frame: np.ndarray, lut: np.ndarray, grade: GradeConfig) -> np.nd
     img[:, :, 2] += grade.teal_blue * shadow_w
 
     # Highlights leicht kühlen, damit der Himmel nicht digital ausbrennt
-    img[:, :, 2] -= grade.highlight_cool * np.power(luma, 3.0)
+    img[:, :, 2] += grade.highlight_cool * np.power(luma, 3.0)
 
     # Haut-/Erdtöne in den Mitteltönen dezent dämpfen
     img[:, :, 0] -= grade.skin_damp * (4.0 * luma * np.power(1.0 - luma, 3.0))
