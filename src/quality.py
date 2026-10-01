@@ -522,6 +522,97 @@ def check_window(
     return score
 
 
+def find_highlights(
+    analysis: ClipAnalysis,
+    duration: float,
+    lengths: list[float],
+    cfg: QualityConfig,
+    edge_trim: float,
+) -> list[float]:
+    """Findet die besten Schnitte in einem Clip anhand der Bildqualität.
+
+    Verhindert Schnitte am Anfang und Ende des Clips (Kameraeinstellungen)
+    durch einen vergrößerten edge_trim (min. 1.0s). Sucht dann nach den
+    Fenstern mit der höchsten Schärfe und den wenigsten Belichtungsproblemen.
+    Zwei Schnitte im selben Clip müssen einen Mindestabstand haben (overlap).
+
+    Fallback auf `spread_windows`, wenn der Clip zu kurz für die Suche ist.
+    """
+    if not lengths:
+        return []
+
+    # Vergrößere den Rand für Highlights auf mind. 1.0 Sekunde (Kamera wackelt oft am Start/Ende)
+    safe_edge = max(edge_trim, 1.0)
+    total_len = sum(lengths)
+
+    # Abstand zwischen zwei Cuts aus demselben Clip
+    gap = 0.5
+    needed_span = total_len + (len(lengths) - 1) * gap
+
+    usable = duration - 2.0 * safe_edge
+
+    if not analysis.usable or usable < needed_span or not cfg.enabled:
+        # Fallback auf einfaches Spread, wenn zu wenig Platz oder keine Analyse
+        return spread_windows(duration, lengths, edge_trim)
+
+    candidates: list[dict[str, Any]] = []
+    # Teste alle 0.5 Sekunden ein Fenster der durchschnittlichen Länge
+    avg_length = total_len / len(lengths)
+
+    current = safe_edge
+    while current + avg_length <= duration - safe_edge:
+        score = window_score(analysis, current, current + avg_length, cfg)
+        if score.frames > 0:
+            problems = _local_problems(score, cfg)
+            candidates.append(
+                {
+                    "start": current,
+                    "end": current + avg_length,
+                    "problems": len(problems),
+                    "sharpness": score.sharpness,
+                }
+            )
+        current += 0.5
+
+    # Sortiere Kandidaten: am wenigsten Probleme zuerst, dann höchste Schärfe
+    candidates.sort(key=lambda c: (c["problems"], -c["sharpness"]))
+
+    chosen_starts: list[float] = []
+    max_length = max(lengths)
+
+    for _ in lengths:
+        placed = False
+        for cand in candidates:
+            cand_start = float(cand["start"])
+            cand_end = cand_start + max_length
+
+            # Prüfen ob die MAXIMALE Länge über den safe_edge hinausragt
+            if cand_end > duration - safe_edge + 1e-4:
+                continue
+
+            # Prüfen ob es mit bereits gewählten kollidiert (inkl. gap)
+            # Wir blockieren immer max_length, damit später egal welche Länge zugeordnet wird,
+            # der Platz ausreicht.
+            conflict = False
+            for chosen in chosen_starts:
+                if not (cand_end + gap <= chosen + 1e-4 or cand_start >= chosen + max_length + gap - 1e-4):
+                    conflict = True
+                    break
+
+            if not conflict:
+                chosen_starts.append(cand_start)
+                placed = True
+                break
+
+        if not placed:
+            # Falls wir keinen Platz mehr finden, brechen wir ab und
+            # delegieren komplett ans klassische Fallback
+            return spread_windows(duration, lengths, edge_trim)
+
+    # Wichtig: Chronologische Reihenfolge für die Pipeline!
+    return sorted(chosen_starts)
+
+
 def spread_windows(duration: float, lengths: list[float], edge_trim: float) -> list[float]:
     """Verteilt ``lengths``-Fenster gleichmäßig über den ganzen Clip.
 

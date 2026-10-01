@@ -39,6 +39,7 @@ from .quality import (
     clamp_start,
     plan_windows,
     spread_windows,
+    find_highlights,
 )
 from .styling import (
     GradeConfig,
@@ -306,13 +307,18 @@ def build_segments(
         if not wanted:
             continue
 
-        starts = spread_windows(source_duration, wanted, edge_trim)
+        analysis = analyses.get(clip.path) if analyses else None
+
+        if gate is not None and analysis is not None:
+            starts = find_highlights(analysis, source_duration, wanted, gate, edge_trim)
+        else:
+            starts = spread_windows(source_duration, wanted, edge_trim)
+
         windows = []
         for start, length in zip(starts, wanted):
             start = clamp_start(start, length, source_duration)
             windows.append((start, start + length))
 
-        analysis = analyses.get(clip.path) if analyses else None
         if gate is not None and (analysis is None or not analysis.usable):
             reason = "keine Analyse" if analysis is None else (analysis.error or "unbekannt")
             log.info("%s: Qualitätsprüfung übersprungen (%s)", clip.name, reason)
