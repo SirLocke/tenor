@@ -39,6 +39,7 @@ from .quality import (
     clamp_start,
     plan_windows,
     spread_windows,
+    find_highlights,
 )
 from .styling import (
     GradeConfig,
@@ -306,13 +307,18 @@ def build_segments(
         if not wanted:
             continue
 
-        starts = spread_windows(source_duration, wanted, edge_trim)
+        analysis = analyses.get(clip.path) if analyses else None
+
+        if gate is not None and analysis is not None:
+            starts = find_highlights(analysis, source_duration, wanted, gate, edge_trim)
+        else:
+            starts = spread_windows(source_duration, wanted, edge_trim)
+
         windows = []
         for start, length in zip(starts, wanted):
             start = clamp_start(start, length, source_duration)
             windows.append((start, start + length))
 
-        analysis = analyses.get(clip.path) if analyses else None
         if gate is not None and (analysis is None or not analysis.usable):
             reason = "keine Analyse" if analysis is None else (analysis.error or "unbekannt")
             log.info("%s: Qualitätsprüfung übersprungen (%s)", clip.name, reason)
@@ -954,6 +960,7 @@ def run(
     duration: float | None = None,
     grade: str | None = None,
     pace: str | None = None,
+    lossless: bool = False,
 ) -> RenderResult:
     """Kompletter Pipeline-Lauf: Metadaten -> Schnitt -> Render -> Export."""
     cfg = load_config(config_path)
@@ -961,6 +968,9 @@ def run(
     # ist, dass die Datei auf der Platte schon die richtigen Werte enthält.
     if output_dir is not None:
         cfg["output_dir"] = str(output_dir)
+    if lossless:
+        cfg.setdefault("video", {})
+        cfg["video"]["lossless"] = True
     if no_geocoding:
         cfg.setdefault("geocoding", {})
         cfg["geocoding"] = {**cfg["geocoding"], "enabled": False}
@@ -1043,24 +1053,30 @@ def run(
     # Musikquelle auflösen: lokale Datei, Spotify URI oder Fallback-BPM
     durations: list[float] = []
     beat_source = "fallback"
-    music_path = _pick_music(music, cfg)
 
-    if music_path is not None:
-        # Lokale MP3-Datei
-        durations = detect_beat_durations(music_path, cut_cfg)
-        beat_source = f"beats:{music_path.name}" if durations else "fallback"
-    elif isinstance(music, str) and music.startswith("spotify:"):
+    if isinstance(music, str) and music.startswith("spotify:"):
         # Spotify URI explizit übergeben
         durations = _fetch_spotify_beats(music, cfg)
         beat_source = f"spotify:{music}" if durations else "fallback"
+    elif music:
+        # Lokale MP3-Datei explizit übergeben
+        music_path = _pick_music(music, cfg)
+        if music_path is not None:
+            durations = detect_beat_durations(music_path, cut_cfg)
+            beat_source = f"beats:{music_path.name}" if durations else "fallback"
     else:
-        # Spotify aus Config prüfen
+        # Keine CLI-Vorgabe -> Config-Hierarchie auswerten (1. Spotify, 2. music_dir)
         spotify_cfg = get(cfg, "spotify", {}) or {}
-        if spotify_cfg.get("enabled"):
+        if spotify_cfg.get("enabled") and spotify_cfg.get("track_uri"):
             track_uri = spotify_cfg.get("track_uri")
-            if track_uri:
-                durations = _fetch_spotify_beats(track_uri, cfg)
-                beat_source = f"spotify:{track_uri}" if durations else "fallback"
+            durations = _fetch_spotify_beats(track_uri, cfg)
+            beat_source = f"spotify:{track_uri}" if durations else "fallback"
+
+        if not durations:
+            music_path = _pick_music(None, cfg)
+            if music_path is not None:
+                durations = detect_beat_durations(music_path, cut_cfg)
+                beat_source = f"beats:{music_path.name}" if durations else "fallback"
 
     if not durations:
         # Reiner BPM-Takt. Wichtig: das Ergebnis muss als durations-Liste
@@ -1281,6 +1297,12 @@ def export_reel(
     final = rendered[0]
     ffmpeg_params = ["-pix_fmt", str(video_cfg.get("pixel_format", "yuv420p"))]
     crf = video_cfg.get("crf")
+    preset = str(video_cfg.get("preset", "medium"))
+
+    if video_cfg.get("lossless"):
+        crf = 0
+        preset = "ultrafast"
+
     if crf is not None:
         ffmpeg_params += ["-crf", str(crf)]
     if bool(video_cfg.get("faststart", True)):
@@ -1295,7 +1317,7 @@ def export_reel(
             fps=int(video_cfg.get("fps", 30)),
             codec=str(video_cfg.get("codec", "libx264")),
             audio=bool(video_cfg.get("audio", False)),
-            preset=str(video_cfg.get("preset", "medium")),
+            preset=preset,
             threads=threads or None,
             ffmpeg_params=ffmpeg_params,
             logger=None,
@@ -1401,6 +1423,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dry-run", action="store_true", help="nur Schnittplan ausgeben, kein Export")
     parser.add_argument("--delete-after", action="store_true", help="Rohclips nach Export löschen")
+    parser.add_argument("--lossless", action="store_true", help="verlustfrei exportieren (CRF 0, ultrafast)")
     parser.add_argument("--json", action="store_true", help="Ergebnis als JSON auf stdout")
     parser.add_argument("-q", "--quiet", action="store_true", help="nur Warnungen und Fehler loggen")
     return parser
@@ -1436,6 +1459,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         duration=args.duration,
         grade=args.grade,
         pace=args.pace,
+        lossless=args.lossless,
     )
 
     if args.json:

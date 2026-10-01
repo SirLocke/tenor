@@ -34,6 +34,7 @@ from src.quality import (  # noqa: E402
     signature_distance,
     spread_windows,
     window_score,
+    find_highlights,
 )
 
 
@@ -505,6 +506,16 @@ class TestConfig:
     def test_missing_section_uses_dataclass_defaults(self) -> None:
         assert QualityConfig.from_config({}).enabled
 
+    def test_visual_interest_metrics_are_parsed(self) -> None:
+        cfg = QualityConfig.from_config({
+            "min_motion": 5.5,
+            "min_faces": 1.0,
+            "min_color_variance": 12.3
+        })
+        assert cfg.min_motion == 5.5
+        assert cfg.min_faces == 1.0
+        assert cfg.min_color_variance == 12.3
+
     def test_garbage_values_do_not_crash(self) -> None:
         cfg = QualityConfig.from_config(
             {"search_offsets": ["x", None, 0.5, {}], "sample_fps": "nonsense",
@@ -587,3 +598,29 @@ class TestWindowPlan:
 
     def test_length_never_negative(self) -> None:
         assert WindowPlan(2.5, 1.0).length == 0.0
+
+def test_find_highlights_mismatched_lengths() -> None:
+    analysis = _analysis(duration=10.0, frames=40)
+    cfg = QualityConfig(enabled=True)
+    lengths = [2.0, 1.0, 1.5]
+
+    # max_length = 2.0
+    # edge_trim = 1.0 (safe_edge = 1.0)
+    # total_len = 4.5
+    # gap = 0.5
+    # needed_span = 4.5 + 2 * 0.5 = 5.5
+    # usable = 10.0 - 2.0 = 8.0 > 5.5
+
+    # Candidates are tested with avg_length = 1.5
+    # Start candidate max: 10.0 - 1.0 - 1.5 = 7.5
+    # Since we allocate using max_length = 2.0, chosen cand_end = cand_start + 2.0
+    # First cut cand_start = 1.0. (cand_end = 3.0)
+    # Next must start at 3.0 + 0.5 = 3.5.
+    # Second cand_start = 3.5. (cand_end = 5.5)
+    # Next must start at 5.5 + 0.5 = 6.0.
+    # Third cand_start = 6.0.
+
+    starts = find_highlights(analysis, 10.0, lengths, cfg, edge_trim=1.0)
+
+    assert len(starts) == 3
+    assert starts == [1.0, 3.5, 6.0]
