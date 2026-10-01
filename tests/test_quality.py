@@ -599,6 +599,44 @@ class TestWindowPlan:
     def test_length_never_negative(self) -> None:
         assert WindowPlan(2.5, 1.0).length == 0.0
 
+def test_quality_config_validation() -> None:
+    with pytest.raises(ValueError, match="min_sharpness darf nicht negativ sein"):
+        QualityConfig(min_sharpness=-10.0)
+
+    with pytest.raises(ValueError, match="min_luma darf nicht negativ sein"):
+        QualityConfig(min_luma=-5.0)
+
+    with pytest.raises(ValueError, match="max_luma muss zwischen 0 und 255 liegen"):
+        QualityConfig(max_luma=300.0)
+
+    with pytest.raises(ValueError, match="max_luma muss zwischen 0 und 255 liegen"):
+        QualityConfig(max_luma=-1.0)
+
+    with pytest.raises(ValueError, match="max_black_ratio muss zwischen 0 und 1 liegen"):
+        QualityConfig(max_black_ratio=1.5)
+
+    with pytest.raises(ValueError, match="max_black_ratio muss zwischen 0 und 1 liegen"):
+        QualityConfig(max_black_ratio=-0.1)
+
+    with pytest.raises(ValueError, match="max_white_ratio muss zwischen 0 und 1 liegen"):
+        QualityConfig(max_white_ratio=2.0)
+
+    with pytest.raises(ValueError, match="max_white_ratio muss zwischen 0 und 1 liegen"):
+        QualityConfig(max_white_ratio=-0.5)
+
+    with pytest.raises(ValueError, match="min_motion darf nicht negativ sein"):
+        QualityConfig(min_motion=-1.0)
+
+    with pytest.raises(ValueError, match="min_faces darf nicht negativ sein"):
+        QualityConfig(min_faces=-2.0)
+
+    with pytest.raises(ValueError, match="min_color_variance darf nicht negativ sein"):
+        QualityConfig(min_color_variance=-3.0)
+
+    with pytest.raises(ValueError, match="duplicate_threshold darf nicht negativ sein"):
+        QualityConfig(duplicate_threshold=-5.0)
+
+
 def test_find_highlights_mismatched_lengths() -> None:
     analysis = _analysis(duration=10.0, frames=40)
     cfg = QualityConfig(enabled=True)
