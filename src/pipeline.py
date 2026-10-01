@@ -1295,23 +1295,24 @@ def export_reel(
 
     errors_seen.extend(errors)
     final = rendered[0]
-    ffmpeg_params = ["-pix_fmt", str(video_cfg.get("pixel_format", "yuv420p"))]
-    crf = video_cfg.get("crf")
-    preset = str(video_cfg.get("preset", "medium"))
 
-    if video_cfg.get("lossless"):
-        crf = 0
-        preset = "ultrafast"
+    def _attempt_export(is_lossless: bool) -> None:
+        ffmpeg_params = ["-pix_fmt", str(video_cfg.get("pixel_format", "yuv420p"))]
+        crf = video_cfg.get("crf")
+        preset = str(video_cfg.get("preset", "medium"))
 
-    if crf is not None:
-        ffmpeg_params += ["-crf", str(crf)]
-    if bool(video_cfg.get("faststart", True)):
-        ffmpeg_params += ["-movflags", "+faststart"]
-    threads = int(video_cfg.get("threads", 0) or 0)
-    if threads:
-        ffmpeg_params += ["-threads", str(threads)]
+        if is_lossless:
+            crf = 0
+            preset = "ultrafast"
 
-    try:
+        if crf is not None:
+            ffmpeg_params += ["-crf", str(crf)]
+        if bool(video_cfg.get("faststart", True)):
+            ffmpeg_params += ["-movflags", "+faststart"]
+        threads = int(video_cfg.get("threads", 0) or 0)
+        if threads:
+            ffmpeg_params += ["-threads", str(threads)]
+
         final.write_videofile(
             str(partial),
             fps=int(video_cfg.get("fps", 30)),
@@ -1322,12 +1323,26 @@ def export_reel(
             ffmpeg_params=ffmpeg_params,
             logger=None,
         )
+
+    try:
+        _attempt_export(bool(video_cfg.get("lossless")))
     except Exception as exc:
-        log.exception("Export nach %s fehlgeschlagen: %s", partial, exc)
         partial.unlink(missing_ok=True)
-        if errors_seen is not None:
-            errors_seen.append(f"Export fehlgeschlagen: {exc}")
-        return None
+        if bool(video_cfg.get("lossless")):
+            log.warning("Lossless-Export fehlgeschlagen, versuche Standard-Export: %s", exc)
+            try:
+                _attempt_export(False)
+            except Exception as exc2:
+                log.exception("Export nach %s fehlgeschlagen: %s", partial, exc2)
+                partial.unlink(missing_ok=True)
+                if errors_seen is not None:
+                    errors_seen.append(f"Export fehlgeschlagen: {exc2}")
+                return None
+        else:
+            log.exception("Export nach %s fehlgeschlagen: %s", partial, exc)
+            if errors_seen is not None:
+                errors_seen.append(f"Export fehlgeschlagen: {exc}")
+            return None
     except BaseException:
         # SIGTERM/Stromausfall: unfertige Datei nicht liegen lassen
         partial.unlink(missing_ok=True)
