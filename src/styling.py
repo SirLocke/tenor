@@ -149,7 +149,15 @@ class GradeConfig:
         for k, v in style.items():
             if k in known and v is not None and preset is None:
                 try:
-                    base_params[k] = float(v)
+                    val = float(v)
+                    # Wenn die config.yaml die Standardwerte des "natural" Presets enthält,
+                    # und ein anderes Preset gewählt ist, ignorieren wir diese Werte,
+                    # es sei denn, sie wurden vom Nutzer explizit geändert.
+                    if chosen_preset != "natural":
+                        natural_default = GRADE_PRESETS.get("natural", {}).get(k)
+                        if natural_default is not None and abs(val - natural_default) < 1e-6:
+                            continue
+                    base_params[k] = val
                 except (ValueError, TypeError):
                     pass
         return cls(preset=chosen_preset, **base_params)
