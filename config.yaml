@@ -31,7 +31,15 @@ video:
   crf: 19              # 18 = visuell verlustfrei, 23 = klein. 19 = sweet spot
   preset: medium       # ultrafast..veryslow
   pixel_format: yuv420p
-  audio: false         # Reels werden stumm exportiert
+  # Audio ist ein Opt-in. Mit false (Default) bleibt das Reel stumm, die Musik
+  # kommt in Instagram dazu. Mit true wandert der Originalton der Rohclips ins
+  # Reel - die Musik wird dabei NIE untergemischt, sie dient nur der
+  # Schnittplanung. Auch nachtraeglich per CLI: --audio / --no-audio
+  audio: false
+  audio_codec: aac          # AAC - von Instagram/WhatsApp akzeptiert
+  audio_bitrate: 192k
+  audio_sample_rate: 44100   # 48000 bei filmischem Material
+  audio_nbytes: 2            # 2 = 16 bit (Ausgangsqualitaet)
   faststart: true      # -movflags +faststart
   max_duration: 0      # Reel hart auf X Sekunden kürzen (0 = unlimited)
   cover: true          # 1080x1920 Thumbnail erzeugen
@@ -210,11 +218,27 @@ nextcloud:
 # Benötigt SPOTIFY_CLIENT_ID + SPOTIFY_CLIENT_SECRET als Env-Vars.
 # =============================================================================
 spotify:
-  enabled: false
+  enabled: true
   # Track, an dessen Beats geschnitten wird. URI oder URL, z. B.
   #   track_uri: "spotify:track:4cOdK2wGLETKBW3PvgPWqT"
   # Alternativ auf der CLI: python -m src.pipeline -m "spotify:track:<ID>"
-  track_uri: ""
+  track_uri: "spotify:track:0Hcr3kdSB9NVQmFckRsgSD"
+
+  # ACHTUNG (Stand 2026): Spotify beantwortet /v1/audio-analysis für jede App,
+  # die nach dem 27.11.2024 registriert wurde, dauerhaft mit HTTP 403. Ohne
+  # genehmigte "Extended Quota" kommt damit kein einziger Beat an - die
+  # Auswahl bliebe stumm und es würde auf den BPM-Fallback zurückfallen.
+  # track_file ist der Ausweg: die AUDIO des gewählten Tracks als lokale Datei.
+  # librosa gewinnt daraus dieselben Beat-Zeitpunkte, ganz ohne API.
+  #   track_file: /srv/nas/Nils/video-cut/music/the_waves.mp3
+  # Ist die Datei nicht lesbar, greift als naechstes die neueste Datei aus
+  # music_dir und danach der BPM-Fallback.
+  #
+  # Ohne die Datei im Repo zu aendern, per Env-Variable festnageln (geht auch
+  # ueber die systemd-Unit, siehe spotify.env):
+  #   TENOR_SPOTIFY_TRACK_FILE=/srv/nas/Nils/video-cut/music/the_waves.mp3
+  track_file: ""
+
   # Wird nur benutzt, wenn weder Spotify noch eine MP3 im music_dir vorliegt.
   default_bpm: 120
   # Zuordnung Name/Schlüsselwort -> BPM. Der Schlüssel "default" gewinnt, wenn
