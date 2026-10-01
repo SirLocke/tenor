@@ -1047,24 +1047,30 @@ def run(
     # Musikquelle auflösen: lokale Datei, Spotify URI oder Fallback-BPM
     durations: list[float] = []
     beat_source = "fallback"
-    music_path = _pick_music(music, cfg)
 
-    if music_path is not None:
-        # Lokale MP3-Datei
-        durations = detect_beat_durations(music_path, cut_cfg)
-        beat_source = f"beats:{music_path.name}" if durations else "fallback"
-    elif isinstance(music, str) and music.startswith("spotify:"):
+    if isinstance(music, str) and music.startswith("spotify:"):
         # Spotify URI explizit übergeben
         durations = _fetch_spotify_beats(music, cfg)
         beat_source = f"spotify:{music}" if durations else "fallback"
+    elif music:
+        # Lokale MP3-Datei explizit übergeben
+        music_path = _pick_music(music, cfg)
+        if music_path is not None:
+            durations = detect_beat_durations(music_path, cut_cfg)
+            beat_source = f"beats:{music_path.name}" if durations else "fallback"
     else:
-        # Spotify aus Config prüfen
+        # Keine CLI-Vorgabe -> Config-Hierarchie auswerten (1. Spotify, 2. music_dir)
         spotify_cfg = get(cfg, "spotify", {}) or {}
-        if spotify_cfg.get("enabled"):
+        if spotify_cfg.get("enabled") and spotify_cfg.get("track_uri"):
             track_uri = spotify_cfg.get("track_uri")
-            if track_uri:
-                durations = _fetch_spotify_beats(track_uri, cfg)
-                beat_source = f"spotify:{track_uri}" if durations else "fallback"
+            durations = _fetch_spotify_beats(track_uri, cfg)
+            beat_source = f"spotify:{track_uri}" if durations else "fallback"
+
+        if not durations:
+            music_path = _pick_music(None, cfg)
+            if music_path is not None:
+                durations = detect_beat_durations(music_path, cut_cfg)
+                beat_source = f"beats:{music_path.name}" if durations else "fallback"
 
     if not durations:
         # Reiner BPM-Takt. Wichtig: das Ergebnis muss als durations-Liste
