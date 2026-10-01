@@ -52,7 +52,14 @@ DEFAULTS: dict[str, Any] = {
         "crf": 19,
         "preset": "medium",
         "pixel_format": "yuv420p",
+        # Audio ist ein Opt-in: mit ``true`` wandert der Originalton der
+        # Rohclips in das Reel. Musik wird nie untergemischt - sie dient
+        # ausschliesslich der Beat-Schnittplanung.
         "audio": False,
+        "audio_codec": "aac",
+        "audio_bitrate": "192k",
+        "audio_sample_rate": 44100,
+        "audio_nbytes": 2,
         "faststart": True,
         "max_duration": 0,
     },
@@ -89,6 +96,11 @@ DEFAULTS: dict[str, Any] = {
     "spotify": {
         "enabled": False,
         "track_uri": "",
+        # Lokale Audiodatei zum gewaehlten Track. Spotify liefert fuer neu
+        # registrierte Apps keine Beat-Zeitpunkte mehr (HTTP 403 seit
+        # 27.11.2024); mit dieser Datei bleibt die Auswahl wirksam, weil
+        # librosa lokal daraus Beats gewinnt. Per Env: TENOR_SPOTIFY_TRACK_FILE.
+        "track_file": "",
         "default_bpm": 120,
         "fallback_bpm": {
             "default": 120,

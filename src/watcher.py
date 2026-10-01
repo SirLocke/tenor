@@ -267,6 +267,10 @@ class IngestProcessor:
         self.retry_limit = max(int(get(cfg, "watcher.retry_limit", 3) or 0), 0)
         self.retry_backoff = max(float(get(cfg, "watcher.retry_backoff", 300) or 0), 0.0)
         self.output_dir = expand_path(get(cfg, "output_dir", "output"))
+        # Originalton-Opt-in: der Watcher setzt bei ``--audio``/``--no-audio``
+        # ``video.audio`` bereits in der Config; hier nur durchreichen, damit
+        # die Pipeline nicht die Datei auf der Platte erneut lesen muss.
+        self.audio = get(cfg, "video.audio", None)
         state_dir = self.output_dir.parent if self.output_dir.name else self.output_dir
         self.state = WatcherState.load(state_dir / STATE_FILENAME)
         self._pending: set[Path] = set()
@@ -373,6 +377,7 @@ class IngestProcessor:
                     config_path=self.config_path,
                     output_dir=self.output_dir,
                     delete_after=self.delete_after,
+                    audio=self.audio,
                 )
             except Exception as exc:
                 log.exception("Pipeline-Lauf fehlgeschlagen: %s", exc)
@@ -599,6 +604,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("-i", "--ingest", help="Ingest-Ordner (Override)")
     parser.add_argument("-o", "--output", help="Ausgabeordner (Override)")
     parser.add_argument("--once", action="store_true", help="nur einmal scannen und beenden")
+    audio_group = parser.add_mutually_exclusive_group()
+    audio_group.add_argument(
+        "--audio",
+        dest="audio",
+        action="store_true",
+        default=None,
+        help="Originalton der Rohclips ins Reel übernehmen (überschreibt video.audio)",
+    )
+    audio_group.add_argument(
+        "--no-audio",
+        dest="audio",
+        action="store_false",
+        default=None,
+        help="stumm exportieren, auch wenn video.audio: true gesetzt ist",
+    )
     parser.add_argument(
         "--no-scan",
         action="store_true",
@@ -619,6 +639,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         cfg["output_dir"] = args.output
     if args.no_scan:
         cfg["watcher"] = {**cfg.get("watcher", {}), "process_existing_on_start": False}
+    if args.audio is not None:
+        cfg["video"] = {**cfg.get("video", {}), "audio": bool(args.audio)}
 
     setup_logging(cfg, quiet=args.quiet)
     return watch(cfg, config_path=args.config, once=args.once)

@@ -54,3 +54,6 @@ assets/fonts/
 plan.md.save
 datei.txt
 *.log
+
+# ---- Merge-Artefakte ----
+*.orig

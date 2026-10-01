@@ -1,13 +1,24 @@
 """Spotify-Audio-Analysis für Beat-Timestamps.
 
-Die Pipeline schneidet still - die Musik kommt später in Instagram dazu. Hier
-werden daher nur die *Beat-Zeitpunkte* eines Spotify-Tracks geholt, nicht die
-Audio-Datei selbst.
+Die Pipeline exportiert standardmäßig still; die Musik kommt später in Instagram
+dazu. Hier werden daher nur die *Beat-Zeitpunkte* eines Spotify-Tracks geholt,
+nicht die Audio-Datei selbst.
 
 Aktivierung: ``SPOTIFY_CLIENT_ID`` und ``SPOTIFY_CLIENT_SECRET`` als
 Environment-Variablen setzen und in ``config.yaml`` unter ``spotify.enabled``
 aktivieren. Fehlt eine der Voraussetzungen, wird sauber auf den BPM-Fallback
 zurückgefallen - die Pipeline läuft dann ohne Spotify weiter.
+
+.. warning::
+
+   Seit dem **27.11.2024** beantworten ``/v1/audio-analysis`` und
+   ``/v1/audio-features`` nur noch für Apps mit damals genehmigter
+   "Extended Quota" die Anfrage. Für jede später registrierte App liefern sie
+   dauerhaft HTTP 403 - unabhängig von Zugangsdaten und Token. Diese App
+   bekommt deshalb :class:`SpotifyAccessError` statt Beats, und der Aufrufer
+   nutzt eine lokale Audiodatei aus ``music_dir`` oder den BPM-Fallback.
+   ``/v1/tracks/`` ist nicht betroffen, deshalb funktioniert die Anzeige des
+   Tracknamens weiterhin.
 """
 
 from __future__ import annotations
@@ -26,6 +37,25 @@ SPOTIFY_ANALYSIS_URL = "https://api.spotify.com/v1/audio-analysis/{track_id}"
 SPOTIFY_TRACK_URL = "https://api.spotify.com/v1/tracks/{track_id}"
 
 TRACK_ID_RE = re.compile(r"(?:track[:/]|open\.spotify\.com/track/)([A-Za-z0-9]{22})")
+
+#: Erklärung, die bei HTTP 403 auf den quota-gesperrten Endpoints ausgegeben wird.
+QUOTA_HINT = (
+    "Spotify verweigert /v1/audio-analysis für diese App (HTTP 403). Seit dem "
+    "27.11.2024 ist der Endpoint nur noch für Apps mit vor diesem Datum "
+    "genehmigter Extended Quota freigeschaltet - neue Apps bekommen dauerhaft "
+    "403, auch mit korrekten Zugangsdaten. Das lässt sich nicht in der "
+    "Konfiguration beheben: als Beat-Quelle eine lokale Audiodatei über "
+    "spotify.track_file (bzw. music_dir) angeben oder den BPM-Fallback nutzen."
+)
+
+
+class SpotifyAccessError(RuntimeError):
+    """Die Spotify-App darf den angefragten Endpoint nicht benutzen (HTTP 403).
+
+    Wird nur für die quota-gesperrten Endpoints (:data:`QUOTA_HINT`) geworfen,
+    damit der Aufrufer die Einschränkung *einmal* mit Ursache melden kann,
+    statt bei jedem Lauf still in den BPM-Fallback zu fallen.
+    """
 
 
 class _TokenCache:
@@ -121,8 +151,13 @@ def get_token(force: bool = False) -> str | None:
         return None
 
 
-def _auth_get(url: str) -> Any | None:
-    """GET mit Bearer-Token, einmaliger Retry bei abgelaufenem Token."""
+def _auth_get(url: str, *, quota_locked: bool = False) -> Any | None:
+    """GET mit Bearer-Token, einmaliger Retry bei abgelaufenem Token.
+
+    ``quota_locked`` markiert Endpoints, die seit 27.11.2024 für neue Apps
+    gesperrt sind. Ein 403 wird dort als :class:`SpotifyAccessError` gemeldet
+    (mit Ursache), statt es als generischen Fehler zu verschlucken.
+    """
     requests = _requests()
     if requests is None:
         return None
@@ -142,6 +177,8 @@ def _auth_get(url: str) -> Any | None:
             continue
         if response.status_code == 404:
             return None
+        if response.status_code == 403 and quota_locked:
+            raise SpotifyAccessError(QUOTA_HINT)
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After", "?")
             log.warning("Spotify-Drosselung erreicht (Retry-After=%s)", retry_after)
@@ -179,7 +216,7 @@ def fetch_spotify_beats(track_uri: str) -> list[float] | None:
         log.warning("Ungültige Spotify-Referenz: %r", track_uri)
         return None
 
-    data = _auth_get(SPOTIFY_ANALYSIS_URL.format(track_id=track_id))
+    data = _auth_get(SPOTIFY_ANALYSIS_URL.format(track_id=track_id), quota_locked=True)
     if data is None:
         return None
 

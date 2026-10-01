@@ -22,7 +22,13 @@ from watchdog.events import FileSystemEvent
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import DEFAULTS  # noqa: E402
-from src.pipeline import _get_fallback_bpm, _safe_bpm, durations_from_bpm  # noqa: E402
+from src.pipeline import (  # noqa: E402
+    _get_fallback_bpm,
+    _pick_music,
+    _safe_bpm,
+    build_parser,
+    durations_from_bpm,
+)
 from src.spotify_beats import extract_track_id  # noqa: E402
 from src.watcher import (  # noqa: E402
     IngestHandler,
@@ -406,7 +412,7 @@ def test_build_segment_clip_never_exceeds_source_duration() -> None:
     import src.pipeline as pipeline_module
 
     original = pipeline_module._open_source
-    pipeline_module._open_source = lambda _p: fake  # type: ignore[assignment]
+    pipeline_module._open_source = lambda _p, **_kw: fake  # type: ignore[assignment]
     original_crop = pipeline_module.center_crop_resize
     pipeline_module.center_crop_resize = lambda piece, _w, _h: piece  # type: ignore[assignment]
     try:
@@ -415,3 +421,297 @@ def test_build_segment_clip_never_exceeds_source_duration() -> None:
     finally:
         pipeline_module._open_source = original  # type: ignore[assignment]
         pipeline_module.center_crop_resize = original_crop  # type: ignore[assignment]
+
+
+# --------------------------------------------------------------------------- #
+# Audio: Ton mitnehmen, Musik nie untermischen
+# --------------------------------------------------------------------------- #
+def test_audio_is_opt_in_not_silent_by_default() -> None:
+    """Ohne ``--audio`` bleibt das Reel stumm - der Ton kommt in Instagram dazu."""
+    assert DEFAULTS["video"]["audio"] is False
+    args = build_parser().parse_args(["-i", "clip.mov"])
+    assert args.audio is None
+
+    with_audio = build_parser().parse_args(["-i", "clip.mov", "--audio"])
+    assert with_audio.audio is True
+
+
+def test_audio_flags_are_mutually_exclusive() -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["-i", "clip.mov", "--audio", "--no-audio"])
+
+
+def test_audio_codec_is_aac_not_moviepy_default() -> None:
+    """moviepy schreibt sonst libmp3lame - das lehnt Instagram ab."""
+    assert DEFAULTS["video"]["audio_codec"] == "aac"
+    assert DEFAULTS["video"]["audio_bitrate"]
+
+
+def test_cli_audio_flag_reaches_run(tmp_path: Path) -> None:
+    """--audio muss ``run()`` erreichen - sonst wäre die Config stumm schlaglos."""
+    import src.pipeline as pipeline_module
+
+    captured: dict[str, Any] = {}
+
+    def _fake_run(*_args: Any, **kwargs: Any) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace(output=None, outputs=[], covers=[], segments=[], errors=[])
+
+    original = pipeline_module.run
+    pipeline_module.run = _fake_run  # type: ignore[assignment]
+    try:
+        pipeline_module.main(["-i", str(tmp_path), "--audio"])
+        assert captured["audio"] is True
+        captured.clear()
+        pipeline_module.main(["-i", str(tmp_path), "--no-audio"])
+        assert captured["audio"] is False
+        captured.clear()
+        pipeline_module.main(["-i", str(tmp_path)])
+        assert captured["audio"] is None
+    finally:
+        pipeline_module.run = original  # type: ignore[assignment]
+
+
+def test_audio_override_beats_config() -> None:
+    """``audio=True/False`` schlägt ``video.audio``, ``None`` lässt es in Ruhe."""
+    from src.pipeline import _apply_audio_override
+
+    cfg: dict[str, Any] = {"video": {"audio": False, "fps": 30}}
+    _apply_audio_override(cfg, True)
+    assert cfg["video"]["audio"] is True
+
+    _apply_audio_override(cfg, False)
+    assert cfg["video"]["audio"] is False
+
+    _apply_audio_override(cfg, None)
+    assert cfg["video"]["audio"] is False
+    assert cfg["video"]["fps"] == 30  # nichts anderes angefasst
+
+    empty: dict[str, Any] = {}
+    _apply_audio_override(empty, True)
+    assert empty["video"]["audio"] is True
+
+
+def test_watcher_audio_flag_reaches_pipeline(tmp_path: Path) -> None:
+    """Regression: ``watcher --audio`` landete nur in der Config-Kopie.
+
+    ``pipeline.run()`` liest die Config aber erneut von der Platte und hätte
+    den Opt-in nie gesehen - das Reel wäre trotz ``--audio`` stumm geblieben.
+    """
+    import src.pipeline as pipeline_module
+    from src.watcher import IngestProcessor
+
+    captured: dict[str, Any] = {}
+
+    def _fake_run(*_args: Any, **kwargs: Any) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace(ok=True, output=None, outputs=[], covers=[], segments=[], errors=[])
+
+    cfg: dict[str, Any] = {
+        **DEFAULTS,
+        "ingest_dir": str(tmp_path / "ingest"),
+        "output_dir": str(tmp_path / "out"),
+        "video": {**DEFAULTS["video"], "audio": True},
+    }
+    (tmp_path / "ingest").mkdir(parents=True, exist_ok=True)
+    clip = tmp_path / "ingest" / "clip.mp4"
+    clip.write_bytes(b"stub")
+
+    processor = IngestProcessor(cfg)
+    assert processor.audio is True
+
+    original = pipeline_module.run
+    pipeline_module.run = _fake_run  # type: ignore[assignment]
+    try:
+        processor.process_batch([clip])
+    finally:
+        pipeline_module.run = original  # type: ignore[assignment]
+
+    assert captured["audio"] is True
+
+
+def _base_cfg() -> dict[str, Any]:
+    """Kopie der Defaults - unabhängig von der echten config.yaml."""
+    import copy
+
+    return copy.deepcopy(DEFAULTS)
+
+
+def test_spotify_403_falls_back_to_music_dir(tmp_path: Path) -> None:
+    """Spotify liefert für neue Apps 403 - die lokale Datei muss einspringen.
+
+    Regression: die Auswahl eines Spotify-Tracks lief ins Leere und das Reel
+    wurde stumpf auf 120 BPM geschnitten.
+    """
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    song = music_dir / "chosen.mp3"
+    song.write_bytes(b"not-really-mp3")
+
+    cfg = _base_cfg()
+    cfg["music_dir"] = str(music_dir)
+    cfg["spotify"] = {"enabled": True, "track_uri": "spotify:track:0Hcr3kdSB9NVQmFckRsgSD"}
+
+    assert _pick_music(None, cfg) == song
+
+
+def test_spotify_track_file_is_pinned(tmp_path: Path) -> None:
+    """track_file gewinnt vor der neuesten Datei aus music_dir."""
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    newest = music_dir / "newest.mp3"
+    newest.write_bytes(b"a")
+    pinned = tmp_path / "the_chosen_track.mp3"
+    pinned.write_bytes(b"b")
+
+    cfg = _base_cfg()
+    cfg["music_dir"] = str(music_dir)
+    cfg["spotify"] = {"enabled": True, "track_file": str(pinned)}
+
+    assert _pick_music(None, cfg) == pinned
+
+
+def test_spotify_track_file_missing_falls_back(tmp_path: Path) -> None:
+    """Ein toter track_file darf den Lauf nicht abbrechen."""
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    song = music_dir / "only.mp3"
+    song.write_bytes(b"a")
+
+    cfg = _base_cfg()
+    cfg["music_dir"] = str(music_dir)
+    cfg["spotify"] = {"enabled": True, "track_file": str(tmp_path / "nope.mp3")}
+
+    assert _pick_music(None, cfg) == song
+
+
+def test_spotify_access_error_is_actionable() -> None:
+    """Die 403-Meldung muss den Grund nennen, nicht nur 'HTTP 403'."""
+    from src.spotify_beats import QUOTA_HINT
+
+    assert "403" in QUOTA_HINT
+    assert "27.11.2024" in QUOTA_HINT
+    assert "track_file" in QUOTA_HINT
+
+
+def test_music_selection_covers_common_formats(tmp_path: Path) -> None:
+    """Nicht-MP3 (m4a/wav/flac) sind gültige Beat-Quellen."""
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    for name in ("a.mp3", "b.m4a", "c.wav", "d.flac"):
+        (music_dir / name).write_bytes(b"x")
+
+    cfg = _base_cfg()
+    cfg["music_dir"] = str(music_dir)
+    cfg["spotify"] = {"enabled": False}
+
+    picked = _pick_music(None, cfg)
+    assert picked is not None
+    assert picked.suffix in (".mp3", ".m4a", ".wav", ".flac")
+
+
+def test_resolve_beats_reports_blocked_spotify(tmp_path: Path) -> None:
+    """Spotify 403 -> lokale Datei + Grund im Report.
+
+    Das ist der eigentliche Fix: vorher blieb der konfigurierte Track stumm
+    wirkungslos und das Reel wurde auf 120 BPM geschnitten, ohne dass man im
+    Report sehen konnte, warum.
+    """
+    import src.pipeline as pipeline_module
+
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    song = music_dir / "song.mp3"
+    song.write_bytes(b"x")
+
+    cfg = _base_cfg()
+    cfg["music_dir"] = str(music_dir)
+    cfg["spotify"] = {"enabled": True, "track_uri": "spotify:track:0Hcr3kdSB9NVQmFckRsgSD"}
+
+    originals = (pipeline_module._fetch_spotify_beats, pipeline_module.detect_beat_durations)
+    pipeline_module._fetch_spotify_beats = (  # type: ignore[assignment]
+        lambda _uri, _cfg: (None, "Spotify blockiert die Audio-Analysis für diese App (HTTP 403)")
+    )
+    pipeline_module.detect_beat_durations = (  # type: ignore[assignment]
+        lambda _path, _cut: [1.5]
+    )
+    try:
+        durations, source, note = pipeline_module._resolve_beats(None, cfg, cfg["cut"])
+    finally:
+        pipeline_module._fetch_spotify_beats, pipeline_module.detect_beat_durations = originals  # type: ignore[assignment]
+
+    assert durations == [1.5]
+    assert source == "beats:song.mp3"
+    assert "403" in note
+
+
+def test_resolve_beats_falls_back_to_bpm_with_reason(tmp_path: Path) -> None:
+    """Ohne jede Audiodatei bleibt der BPM-Takt - mit Begründung, nicht stumm."""
+    import src.pipeline as pipeline_module
+
+    cfg = _base_cfg()
+    cfg["music_dir"] = str(tmp_path / "empty-music")
+    cfg["spotify"] = {"enabled": False}
+    cfg["cut"]["fallback_bpm"] = 120
+
+    durations, source, note = pipeline_module._resolve_beats(None, cfg, cfg["cut"])
+
+    assert durations  # das Grid muss wirklich gesetzt sein, nicht nur geloggt
+    assert source == "fallback:120bpm"
+    assert "Takt-Fallback" in note
+    assert all(1.4 <= d <= 2.0 for d in durations)
+
+
+def test_resolve_beats_uses_track_file_before_music_dir(tmp_path: Path) -> None:
+    """track_file (Audio des gewählten Tracks) schlägt music_dir."""
+    import src.pipeline as pipeline_module
+
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    (music_dir / "newest.mp3").write_bytes(b"a")
+    pinned = tmp_path / "the_waves.mp3"
+    pinned.write_bytes(b"b")
+
+    cfg = _base_cfg()
+    cfg["music_dir"] = str(music_dir)
+    cfg["spotify"] = {"enabled": True, "track_file": str(pinned)}
+
+    original = pipeline_module.detect_beat_durations
+    pipeline_module.detect_beat_durations = lambda _path, _cut: [1.6]  # type: ignore[assignment]
+    try:
+        durations, source, _note = pipeline_module._resolve_beats(None, cfg, cfg["cut"])
+    finally:
+        pipeline_module.detect_beat_durations = original  # type: ignore[assignment]
+
+    assert durations == [1.6]
+    assert source == "beats:the_waves.mp3"
+
+
+def test_resolve_beats_cli_file_wins_over_spotify(tmp_path: Path) -> None:
+    """-m song.mp3 darf nicht von einem konfigurierten Spotify-Track überstimmt werden."""
+    import src.pipeline as pipeline_module
+
+    song = tmp_path / "cli.mp3"
+    song.write_bytes(b"a")
+
+    cfg = _base_cfg()
+    cfg["spotify"] = {"enabled": True, "track_uri": "spotify:track:0Hcr3kdSB9NVQmFckRsgSD"}
+
+    called: list[str] = []
+
+    def _fake_spotify(uri: str, _cfg: Any) -> tuple[list[float] | None, str]:
+        called.append(uri)
+        return [9.9], ""
+
+    original_fetch = pipeline_module._fetch_spotify_beats
+    original_detect = pipeline_module.detect_beat_durations
+    pipeline_module._fetch_spotify_beats = _fake_spotify  # type: ignore[assignment]
+    pipeline_module.detect_beat_durations = lambda _path, _cut: [1.5]  # type: ignore[assignment]
+    try:
+        _durations, source, _note = pipeline_module._resolve_beats(str(song), cfg, cfg["cut"])
+    finally:
+        pipeline_module._fetch_spotify_beats = original_fetch  # type: ignore[assignment]
+        pipeline_module.detect_beat_durations = original_detect  # type: ignore[assignment]
+
+    assert source == "beats:cli.mp3"
+    assert called == []

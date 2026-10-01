@@ -2,15 +2,16 @@
 
 Automatische Video-Pipeline für den Heimserver: überwacht einen Ingest-Ordner,
 ordnet iPhone-Clips chronologisch, schneidet sie auf den Beat, versieht sie mit
-einem Dark-Film-Grading und exportiert stumme **1080x1920 (9:16)** Reels/Shorts
-inklusive Cover-Thumbnail.
+einem Dark-Film-Grading und exportiert **1080x1920 (9:16)** Reels/Shorts
+inklusive Cover-Thumbnail – standardmäßig stumm, optional mit dem Originalton
+der Clips.
 
 ```
 Rohclips (MOV/MP4)                     Reels + Cover
 /srv/nas/Nils/video-cut/ingest   ──►  /srv/nas/Nils/video-cut/output
         │  watchdog + Debounce                    │
-        │  ffprobe (Zeit/GPS)                     └─ 1080x1920 H.264, yuv420p, 30 fps, stumm
-        │  librosa Beat-Grid
+        │  ffprobe (Zeit/GPS)                     └─ 1080x1920 H.264, yuv420p, 30 fps
+        │  librosa Beat-Grid                         (stumm, mit --audio: Clip-Ton/AAC)
         └─ center-crop 9:16 → Dark-Film-LUT → rechtsbündige Typografie
 ```
 
@@ -65,14 +66,29 @@ Unterordner.
 - **Beat-Matching** in drei Stufen, automatisch gewählt:
   1. **Spotify Audio-Analysis** – echte Beat-Timestamps eines Tracks
      (`spotify.track_uri`, braucht `SPOTIFY_CLIENT_ID`/`SECRET`).
-  2. **MP3 im `music_dir`** – `librosa.beat.beat_track` gruppiert Beats zu
-     Downbeats, so dass ein Cut zwischen 1,4 s und 2,0 s liegt. Es wird die
-     *neueste* MP3 genommen.
+     **Achtung:** seit dem 27.11.2024 gibt Spotify diesen Endpoint nur noch an
+     Apps heraus, die damals schon eine *Extended Quota* hatten. Jede später
+     registrierte App bekommt dauerhaft HTTP 403 – dann springt `track_file`
+     bzw. Stufe 2 ein, statt stumm auf 120 BPM zu fallen (s.
+     [Spotify-Beat-Matching](#spotify-beat-matching-optional)).
+  2. **Lokale Audiodatei** – `spotify.track_file` (die Audiospur des gewählten
+     Tracks) oder die *neueste* Datei im `music_dir`. `librosa.beat.beat_track`
+     gruppiert die Beats zu Downbeats, so dass ein Cut zwischen `target_min`
+     und `target_max` liegt. Es zählen `.mp3`, `.m4a`, `.aac`, `.wav`, `.flac`,
+     `.ogg`, `.opus`.
   3. **BPM-Fallback** – `cut.fallback_bpm` (Default 120) erzeugt ein
      künstliches Beat-Grid: Beat = 60/BPM, gruppiert auf ~`cut.target`.
      120 BPM ⇒ 0,5 s Beats ⇒ 3er-Gruppe ⇒ 1,5 s Cuts.
 
-  Das Reel wird **stumm** exportiert – die Musik kommt in Instagram dazu.
+  Die Musik wird **nie untergemischt**. Sie liefert ausschließlich den Takt
+  für den Schnittplan: das Reel ist standardmäßig stumm (die Musik kommt in
+  Instagram dazu) oder enthält mit `video.audio: true` den **Originalton der
+  Rohclips**.
+- **Optionaler Originalton** – mit `video.audio: true` bzw. `--audio` wird der
+  Ton der Rohclips mit exportiert (AAC, `video.audio_bitrate`, default 192 k).
+  Der Ton wird als eigener Ausschnitt aus der Quelle geschnitten, nicht aus dem
+  gegradeten Bild-Clip geerbt, und bleibt damit Frame-genau am Bild. Clips ohne
+  Tonspur werden für ihre Dauer stumm – das Reel verschiebt sich nicht.
 - **Bildqualitäts-Gate** – vor dem Rendern wird pro Rohclip ein schmaler
   Graustufen-Strip gezogen (ein ffmpeg-Durchlauf, Ergebnis unter
   `quality.cache_dir` zwischengespeichert) und jedes geplante Cut-Fenster
@@ -163,6 +179,20 @@ TENOR_CONFIG=./config.yaml python -m src.watcher           # andere Config-Datei
 
 Priorität (steigend): Defaults → `config.yaml` → CLI-Flags → `TENOR_*`.
 
+Der Export und der Ton stecken in `video:`:
+
+| Key | Default | Wirkung |
+| --- | --- | --- |
+| `audio` | `false` | `true` nimmt den **Originalton der Rohclips** mit. Musik wird nie untergemischt |
+| `audio_codec` | `aac` | AAC – das einzige Tonformat, das Instagram/WhatsApp verlässlich annehmen |
+| `audio_bitrate` | `192k` | Ton-Bitrate |
+| `audio_sample_rate` | `44100` | Abtastrate im Ziel; Quellen werden darauf normalisiert |
+| `audio_nbytes` | `2` | 2 = 16 bit |
+
+Per CLI: `--audio` erzwingt Ton, `--no-audio` erzwingt stumm – beide schlagen
+`video.audio` aus der Config. Die Musikauswahl (`-m`, `spotify.track_file`,
+`music_dir`) beeinflusst nur den **Schnitt**, nicht den Export.
+
 Der Grading-Look steckt komplett in `style:`:
 
 | Key | Default | Wirkung |
@@ -212,6 +242,9 @@ der ausgeschaltete Wert `255` bzw. `1.0`.
 # Einzelne Datei, explizite Musik
 .venv/bin/python -m src.pipeline -i clip.MOV -o out/ -t "Madeira" -m song.mp3
 
+# Mit Originalton der Clips (Musik wird nicht untergemischt)
+.venv/bin/python -m src.pipeline -i clip.MOV -m song.mp3 --audio
+
 # Nur den Schnittplan ansehen, kein Export (legt nichts an)
 .venv/bin/python -m src.pipeline -i /srv/nas/Nils/video-cut/ingest --dry-run
 
@@ -224,7 +257,9 @@ der ausgeschaltete Wert `255` bzw. `1.0`.
 
 Wichtige Flags der Pipeline: `--no-cover`, `--no-geo` (ohne Netzwerk),
 `--limit N`, `--json`, `--delete-after` (Rohclits nach Export löschen),
-`--dry-run`.
+`--audio` / `--no-audio` (Ton an/aus), `--dry-run`. `--json` meldet mit
+`beat_source` die tatsächlich verwendete Beat-Quelle und mit `beat_note` eine
+Erklärung, falls die gewünschte Quelle nicht nutzbar war.
 
 ### Ausgabe
 
@@ -232,7 +267,8 @@ Pro Aufnahmetag ein Reel, inklusive Cover:
 
 ```
 output/Madeira-2026/2026-09-11/
-├── 2026-09-28_Madeira-2026_134838.mp4   H.264, yuv420p, 30 fps, 1080x1920, stumm
+├── 2026-09-28_Madeira-2026_134838.mp4   H.264, yuv420p, 30 fps, 1080x1920
+│                                        (stumm, mit --audio: + AAC-Clip-Ton)
 └── 2026-09-28_Madeira-2026_134838.jpg   Cover-Frame bei Sekunde 0.5
 ```
 
@@ -242,9 +278,14 @@ output/Madeira-2026/2026-09-11/
 {
   "outputs": [".../2026-09-11/….mp4", ".../2026-09-12/….mp4"],
   "covers":  [".../2026-09-11/….jpg", ".../2026-09-12/….jpg"],
-  "cuts": 5, "duration": 7.0, "trip": "Madeira 2026"
+  "cuts": 5, "duration": 7.0, "trip": "Madeira 2026",
+  "beat_source": "beats:nastelbom-cinematic-485889.mp3",
+  "beat_note": "Spotify blockiert die Audio-Analysis für diese App (HTTP 403)"
 }
 ```
+
+`beat_source` nennt die tatsächlich benutzte Beat-Quelle, `beat_note` erklärt
+den Abstieg, falls die Wunschquelle nicht griff (`""` = alles wie gewünscht).
 
 Geschrieben wird zunächst nach `*.part.mp4` und erst nach erfolgreichem
 Abschluss atomar umbenannt – ein abgebrochener Lauf hinterlässt keine
@@ -335,8 +376,12 @@ tenor/
 4. **`styling.py`** – `center_crop_resize()` beschneidet auf exakt 9:16,
    `make_grader()` legt die LUT und die Farbstufe auf jeden Frame,
    `build_text_overlay()` rendert Titel/Unterzeile rechtsbündig mit Shadow.
-5. **Export** – `write_videofile()` mit `libx264`, `yuv420p`, 30 fps,
-   `audio=False`; danach das Cover via `ffmpeg -ss 0.5`.
+5. **Export** – `write_videofile()` mit `libx264`, `yuv420p`, 30 fps;
+   `video.audio` (Default `false`) steuert, ob der Originalton der Clips
+   mitgeschrieben wird. Bei `true` wird pro Quellclip ein eigener
+   Audio-Subclip geöffnet (`audio_fps` normalisiert, Codec `aac`), der
+   stummgeschaltete Clips korrekt an der Zeitachse auslässt. Danach das
+   Cover via `ffmpeg -ss 0.5`.
 
 ## Fehlerbehandlung
 
@@ -346,6 +391,8 @@ tenor/
 | Clip scheitert beim Rendern | Nur dieser Cut wird verworfen, restliche Cuts rendern weiter |
 | Kein Beat-Grid (Musik zu kurz/leise) | BPM-Fallback aus `cut.fallback_bpm` (Default 120) |
 | Kein Spotify-Key / Track nicht gefunden | Stille auf den BPM-Fallback, kein Abbruch |
+| Spotify blockiert Audio-Analysis (`HTTP 403`) | Klare Warnung im Log, `beat_note` in der JSON-Ausgabe; Beat-Quelle wird die lokale Datei (`spotify.track_file` bzw. neueste Datei aus `music_dir`), sonst BPM-Fallback |
+| `video.audio: true`, aber Clip ohne Audiospur | Clip wird stumm exportiert, Warnung im Log (`has_audio_stream`) |
 | Nominatim nicht erreichbar | Negativ gecacht, Lauf läuft ohne Ortsangabe weiter |
 | Kein Font ladbar | Pillow-Defaultfont als letzte Instanz |
 | Qualitätsanalyse schlägt fehl (ffmpeg, Timeout, kaputte Datei) | Gate wird für den Clip übersprungen, **kein Material geht verloren** |
@@ -371,11 +418,29 @@ In `config.yaml`:
 spotify:
   enabled: true
   track_uri: "spotify:track:4cOdK2wGLETKBW3PvgPWqT"
+  # Der Audio-Analysis-Endpoint liefert bei neuen Apps HTTP 403.
+  # Dann diese Zeile auf die lokale MP3/M4A des Tracks zeigen lassen:
+  # track_file: "/pfad/zum/track.mp3"
 ```
 
 Oder einmalig auf der CLI: `python -m src.pipeline -m "spotify:track:<ID>"`.
+
+> **Wichtig:** Seit dem 27.11.2024 gibt Spotify `/v1/audio-analysis` und
+> `/v1/audio-features` nur noch an Apps mit *Extended Quota* heraus. Jede
+> später registrierte App erhält dort dauerhaft `HTTP 403`. Das ist **nicht**
+> per Konfiguration behebbar. `tenor` meldet das deshalb jetzt laut:
+
+```text
+Beat-Quelle: beats:nastelbom-cinematic-485889.mp3 (Spotify blockiert die Audio-Analysis für diese App (HTTP 403))
+```
+
 Geholt werden nur die Beat-Zeitpunkte, nicht die Audiodatei – das Reel
-bleibt stumm, die Musik kommt in Instagram dazu.
+bleibt stumm, die Musik kommt in Instagram dazu. Ist Spotify blockiert,
+wird stattdessen `spotify.track_file` (bzw. die neueste Datei im `music_dir`)
+als Beat-Quelle genutzt; nur wenn auch das fehlt, greift der BPM-Fallback.
+Die Musik wird dabei **nie** unter das Reel gemischt – sie bestimmt
+ausschließlich den Schnittplan. Originalton kommt nur über `video.audio: true`
+bzw. `--audio` ins Reel (siehe [Features](#features)).
 
 ## Tests
 

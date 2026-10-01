@@ -81,6 +81,8 @@ class RenderResult:
     place: str | None = None
     trip: str | None = None
     beat_source: str = "fallback"
+    #: Grund, falls die bevorzugte Beat-Quelle nicht nutzbar war (leer = ok).
+    beat_note: str = ""
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -375,6 +377,29 @@ def build_segments(
 # --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
+def has_audio_stream(path: Path) -> bool:
+    """Prüft, ob die fertige Datei wirklich eine Tonspur enthält.
+
+    moviepy legt bei ``audio=True`` auch dann eine Datei an, wenn kein Ton
+    vorhanden war - der Stream fehlt dann aber. Für den Export-Log ist der
+    Unterschied der ganze Punkt: entweder das Reel ist hörbar oder nicht.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "a:0",
+                "-show_entries", "stream=codec_type",
+                "-of", "csv=p=0", str(path),
+            ],
+            capture_output=True,
+            timeout=15,
+            check=True,
+        )
+        return result.stdout.decode().strip() == "audio"
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return False
+
+
 def probe_duration(path: Path) -> float | None:
     """Dauer einer fertigen Datei in Sekunden, oder ``None``.
 
@@ -397,11 +422,15 @@ def probe_duration(path: Path) -> float | None:
         return None
 
 
-def _open_source(path: Path) -> Any:
+def _open_source(path: Path, *, with_audio: bool = False) -> Any:
     """Öffnet eine Videoquelle; beschädigte Dateien werfen eine lesbare Exception.
 
     10-Bit-HEVC (yuv420p10le) wird via ffmpeg nach 8-Bit (yuv420p)
     transkodiert, damit moviepy/OpenCV die Frames verarbeiten können.
+
+    ``with_audio`` steuert, ob die Tonspur geöffnet wird. Sie ist per Default
+    aus, weil die Reels stumm exportiert werden - der Ton eines Rohclips wird
+    nur mit ``video.audio: true`` mitgenommen.
     """
     import tempfile
     import subprocess
@@ -433,11 +462,15 @@ def _open_source(path: Path) -> Any:
                 "-i", str(path),
                 "-pix_fmt", "yuv420p",
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
-                "-an",  # Audio weg (Pipeline exportiert stumm)
-                str(tmp_path),
             ]
+            if with_audio:
+                # Ton nur mitnehmen, wenn er danach wirklich gebraucht wird.
+                transcode_cmd += ["-c:a", "aac", "-b:a", "192k"]
+            else:
+                transcode_cmd += ["-an"]
+            transcode_cmd.append(str(tmp_path))
             subprocess.run(transcode_cmd, timeout=120, check=True)
-            clip = _validated(VideoFileClip(str(tmp_path), audio=False))
+            clip = _validated(VideoFileClip(str(tmp_path), audio=with_audio))
             original_close = clip.close
             scratch = tmp_path
 
@@ -462,7 +495,7 @@ def _open_source(path: Path) -> Any:
             tmp_path = None
         raise
 
-    clip = VideoFileClip(str(path), audio=False)
+    clip = VideoFileClip(str(path), audio=with_audio)
     try:
         return _validated(clip)
     except Exception:
@@ -484,16 +517,24 @@ def build_segment_clip(
     width: int,
     height: int,
     sources: list[Any] | None = None,
+    with_audio: bool = False,
 ) -> Any:
     """Rendert einen Cut: Crop -> Grading -> Text-Overlay.
 
     ``sources`` sammelt die geöffneten Quell-Clips. moviepy liest Frames
     verzögert, die Reader dürfen erst nach ``write_videofile`` geschlossen
     werden - deshalb wird hier *nicht* geschlossen.
+
+    ``with_audio`` hängt die Tonspur des Rohclips an den fertigen Cut. Der Ton
+    wird als *eigener* Subclip aus der Quelle geschnitten, nicht aus dem
+    Bild-Clip geerbt: ``image_transform``/``resized`` liefern einen Clip
+    ohne ``audio``, und ein geerbter Ton wäre nach dem Grading ohnehin
+    unbrauchbar. Die Auswahl bleibt damit eindeutig der Originalton des
+    Clips - es wird nichts aus ``music_dir`` oder Spotify untergemischt.
     """
     from moviepy import CompositeVideoClip, ImageClip
 
-    source = _open_source(segment.clip.path)
+    source = _open_source(segment.clip.path, with_audio=with_audio)
     if sources is not None:
         sources.append(source)
 
@@ -512,6 +553,11 @@ def build_segment_clip(
     piece = source.subclipped(start, end)
     piece = piece.with_duration(max(end - start, frame))
 
+    # Ton des Rohclips: derselbe Ausschnitt, unabhängig vom Bild-Pfad. Wird
+    # vor dem Crop/Grading abgezweigt, weil die Bild-Transformationen den
+    # Audio-Teil des Clips nicht mitnehmen.
+    source_audio = getattr(source, "audio", None) if with_audio else None
+
     piece = center_crop_resize(piece, width, height)
     grader = make_grader(grade)
     if grader is not None:
@@ -520,6 +566,21 @@ def build_segment_clip(
     if overlay_png is not None:
         text = ImageClip(overlay_png, duration=piece.duration)
         piece = CompositeVideoClip([piece, text], size=(width, height))
+
+    if source_audio is not None:
+        try:
+            piece = piece.with_audio(
+                source_audio.subclipped(start, end).with_duration(piece.duration)
+            )
+        except Exception as exc:
+            log.warning(
+                "Ton von %s nicht übernehmbar (%.2f-%.2fs): %s",
+                segment.clip.name,
+                start,
+                end,
+                exc,
+            )
+
     return piece.with_fps(fps)
 
 
@@ -530,9 +591,15 @@ def render_segments(
     grade: GradeConfig,
     overlay_png: Any,
     text_on_first_cuts: int = 0,
+    with_audio: bool = False,
     on_error: list[str] | None = None,
 ) -> list[Any]:
-    """Rendert alle Cuts. Fehlerhafte Clips werden übersprungen, nicht abgebrochen."""
+    """Rendert alle Cuts. Fehlerhafte Clips werden übersprungen, nicht abgebrochen.
+
+    ``with_audio`` nimmt den Originalton der Rohclips mit. Fehlt bei einzelnen
+    Quellen eine Tonspur, bleibt der betreffende Cut stumm - der Reel bleibt
+    dadurch in jedem Fall hörbar, wo Material mit Ton vorliegt.
+    """
     from moviepy import concatenate_videoclips
 
     video_cfg = get(cfg, "video", {}) or {}
@@ -558,6 +625,7 @@ def render_segments(
                 width=width,
                 height=height,
                 sources=sources,
+                with_audio=with_audio,
             )
             rendered.append(clip)
             log.info(
@@ -592,10 +660,19 @@ def render_segments(
         _close_all(sources)
         _close_all(rendered)
         raise
-    try:
-        final = final.without_audio()
-    except Exception:  # pragma: no cover
-        pass
+    if not with_audio:
+        # Ohne Tonwunsch wird die Spur abgeworfen, damit der Export nicht
+        # versehentlich eine mitgeschleppte Tonspur enthält.
+        try:
+            final = final.without_audio()
+        except Exception:  # pragma: no cover
+            pass
+    elif getattr(final, "audio", None) is None:
+        log.warning(
+            "Kein einziger Cut hatte eine Tonspur - der Export bleibt stumm "
+            "(rohvideo.audio_codec=%s)",
+            get(cfg, "video.audio_codec", "aac"),
+        )
     # Quell-Reader leben bis nach write_videofile weiter
     final.tenor_sources = sources  # type: ignore[attr-defined]
     return [final]
@@ -809,46 +886,94 @@ def unique_path(directory: Path, stem: str, suffix: str) -> Path:
 # --------------------------------------------------------------------------- #
 # Orchestrierung
 # --------------------------------------------------------------------------- #
+#: Audio-Endungen, die als Beat-Quelle taugen. librosa liest sie über
+#: soundfile/audioread; alles, was ffmpeg dekodieren kann, funktioniert auch.
+MUSIC_EXTENSIONS = (".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus")
+
+
 def _pick_music(music: str | Path | None, cfg: Mapping[str, Any]) -> Path | None:
+    """Bestimmt die lokale Audiodatei für das Beat-Matching.
+
+    Reihenfolge:
+
+    1. expliziter Pfad (``-m song.mp3`` oder ``music.file`` aus der Config)
+    2. ``spotify.track_file`` - Datei, die zum konfigurierten Track gehört,
+       falls Spotify den Track nicht selbst analysieren darf
+    3. die *neueste* Audiodatei in ``music_dir``
+
+    Spotify liefert seit 27.11.2024 für neue Apps keine Beat-Zeitpunkte mehr
+    (HTTP 403, s. :mod:`src.spotify_beats`). Damit die Auswahl dort nicht
+    wirkungslos bleibt, kann zu ``spotify.track_uri`` eine lokale Datei
+    zugeordnet werden. Ist beides gesetzt, gewinnt die lokal zugeordnete Datei.
+    """
     if music:
         path = Path(str(music)).expanduser()
-        return path if path.is_file() else None
+        if path.is_file():
+            return path
+        log.warning("Musikdatei nicht gefunden: %s", path)
+        return None
+
+    # 1. Datei, die zum ausgewählten Spotify-Track gehört.
+    spotify_cfg = get(cfg, "spotify", {}) or {}
+    if spotify_cfg.get("enabled"):
+        pinned = str(spotify_cfg.get("track_file") or "").strip()
+        if pinned:
+            path = expand_path(pinned)
+            if path.is_file():
+                return path
+            log.warning(
+                "spotify.track_file %s nicht gefunden - Fallback auf music_dir", path
+            )
+
     music_dir = get(cfg, "music_dir")
     if not music_dir:
         return None
     directory = expand_path(music_dir)
     if not directory.is_dir():
         return None
+    wanted = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in MUSIC_EXTENSIONS}
     candidates = sorted(
-        (p for p in directory.iterdir() if p.suffix.lower() == ".mp3" and p.is_file()),
+        (p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in wanted),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
     return candidates[0] if candidates else None
 
 
-def _fetch_spotify_beats(track_uri: str, cfg: Mapping[str, Any]) -> list[float] | None:
+def _fetch_spotify_beats(
+    track_uri: str, cfg: Mapping[str, Any]
+) -> tuple[list[float] | None, str]:
     """Beat-Timestamps von Spotify holen und in Cut-Längen übersetzen.
 
+    Gibt ``(Cut-Längen | None, Grund)`` zurück. Der Grund ist leer, wenn die
+    Beats wirklich ankamen, und sonst die Ursache - so wird im ``--json``
+    sichtbar, *warum* der gewählte Track nicht geschnitten wurde (typisch:
+    HTTP 403, s. :mod:`src.spotify_beats`).
+
     Importiert ``spotify_beats`` erst hier, damit die Pipeline auch ohne das
-    optionale Modul startet. Fehler werden geschluckt - der Aufrufer fällt auf
-    den BPM-Takt zurück.
+    optionale Modul startet.
     """
     spotify_cfg = get(cfg, "spotify", {}) or {}
     if not spotify_cfg.get("enabled"):
-        return None
+        return None, "spotify.enabled ist false"
     try:
-        from .spotify_beats import fetch_spotify_beats
+        from .spotify_beats import SpotifyAccessError, fetch_spotify_beats
     except ImportError as exc:  # pragma: no cover
         log.warning("Spotify-Modul nicht verfügbar (%s)", exc)
-        return None
+        return None, f"Spotify-Modul nicht verfügbar ({exc})"
     try:
         beats = fetch_spotify_beats(track_uri)
+    except SpotifyAccessError as exc:
+        # Kein Konfigurationsfehler, sondern eine API-Sperre: einmal deutlich
+        # benennen und dann auf die lokale Datei bzw. den BPM-Fallback
+        # zurückfallen, sonst wiederholt sich die Meldung bei jedem Batch.
+        log.warning("Spotify-Beat-Detection gesperrt: %s", exc)
+        return None, "Spotify blockiert die Audio-Analysis für diese App (HTTP 403)"
     except Exception as exc:  # pragma: no cover
         log.warning("Spotify Beat-Detection fehlgeschlagen: %s", exc)
-        return None
+        return None, f"Spotify-Fehler: {exc}"
     if not beats or len(beats) < 3:
-        return None
+        return None, "Spotify lieferte keine verwertbaren Beats"
 
     # Gleiche Gruppierung wie beim lokalen Beat-Tracking: Beats auf eine
     # Zylinderlänge von ~target gruppieren, damit Cuts auf Downbeats landen.
@@ -859,7 +984,7 @@ def _fetch_spotify_beats(track_uri: str, cfg: Mapping[str, Any]) -> list[float] 
 
     intervals = [b - a for a, b in zip(beats, beats[1:]) if b - a > 0.05]
     if not intervals:
-        return None
+        return None, "Spotify-Beats zu unregelmäßig"
     median_beat = float(sorted(intervals)[len(intervals) // 2])
     group = max(1, int(round(median_beat / target)))
     durations: list[float] = []
@@ -873,7 +998,7 @@ def _fetch_spotify_beats(track_uri: str, cfg: Mapping[str, Any]) -> list[float] 
         group,
         median_beat * group,
     )
-    return durations or None
+    return (durations or None), ""
 
 
 def _get_fallback_bpm(cfg: Mapping[str, Any], music_hint: str | Path | None) -> float:
@@ -945,6 +1070,106 @@ def _safe_bpm(value: Any, fallback: float | None) -> float:
     return bpm
 
 
+def _resolve_beats(
+    music: str | Path | None,
+    cfg: Mapping[str, Any],
+    cut_cfg: Mapping[str, Any],
+) -> tuple[list[float], str, str]:
+    """Wählt das Beat-Grid: Spotify -> lokale Datei -> BPM-Fallback.
+
+    Gibt ``(Cut-Längen, Quelle, Grund)`` zurück. Der Grund ist leer, wenn die
+    bevorzugte Quelle direkt funktioniert hat, und beschreibt sonst jede
+    Station des Abstiegs. Damit ist im ``--json`` und im Log sichtbar, warum
+    etwa ein konfigurierter Spotify-Track nicht geschnitten wurde - vorher
+    fiel die Pipeline in genau diesem Fall still auf 120 BPM zurück.
+    """
+    notes: list[str] = []
+    durations: list[float] = []
+    beat_source = ""
+
+    explicit_uri = isinstance(music, str) and music.startswith("spotify:")
+    explicit_file = bool(music) and not explicit_uri
+
+    spotify_cfg = get(cfg, "spotify", {}) or {}
+    track_uri = ""
+    if explicit_uri:
+        track_uri = str(music)
+    elif not music and spotify_cfg.get("enabled"):
+        track_uri = str(spotify_cfg.get("track_uri") or "")
+
+    # 1. Spotify - auch wenn der Endpoint für neue Apps gesperrt ist, damit
+    #    der Grund im Report landet statt still im BPM-Fallback zu verschwinden.
+    if track_uri:
+        found, reason = _fetch_spotify_beats(track_uri, cfg)
+        durations = list(found or [])
+        if durations:
+            beat_source = f"spotify:{track_uri}"
+        elif reason:
+            notes.append(reason)
+
+    def _try_file(path: Path | None, label: str) -> None:
+        nonlocal durations, beat_source
+        if path is None:
+            notes.append(f"{label} nicht gefunden")
+            return
+        found = detect_beat_durations(path, cut_cfg)
+        if found:
+            durations = found
+            beat_source = f"beats:{path.name}"
+            return
+        notes.append(f"{label} {path.name!r} lieferte keine verwertbaren Beats")
+
+    # 2. Explizite Datei von der CLI.
+    if not durations and explicit_file:
+        _try_file(_pick_music(music, cfg), f"Musikdatei {str(music)!r}")
+
+    # 3. `spotify.track_file` (Audio des gewählten Tracks) bzw. die neueste
+    #    Datei im music_dir. Greift nicht bei expliziter CLI-Vorgabe.
+    if not durations and not music:
+        track_file_cfg = str(spotify_cfg.get("track_file") or "").strip()
+        path = _pick_music(None, cfg)
+        if track_file_cfg and path is not None:
+            configured = expand_path(track_file_cfg)
+            # Sagt der Report nicht, dass die Wunschdatei ersetzt wurde, sieht
+            # man nur den Schnitt-Takt und sucht den Fehler in der falschen Ecke.
+            if path != configured:
+                notes.append(
+                    f"spotify.track_file {configured.name!r} nicht nutzbar - "
+                    f"verwende {path.name!r} aus music_dir"
+                )
+        _try_file(path, "spotify.track_file" if track_file_cfg else "Audiodatei")
+
+    # 4. Reiner BPM-Takt. Wichtig: das Ergebnis muss als durations-Liste
+    #    weitergegeben werden - der Log-Text allein steuert nichts.
+    if not durations:
+        fallback_bpm = _get_fallback_bpm(cfg, music)
+        durations = durations_from_bpm(fallback_bpm, cut_cfg)
+        beat_source = f"fallback:{fallback_bpm:g}bpm"
+        notes.append(
+            "keine echten Beats verfügbar - Takt-Fallback "
+            f"{fallback_bpm:g} BPM (Beat {60.0 / fallback_bpm if fallback_bpm else 0.0:.2f}s, "
+            f"Cut {durations[0] if durations else 0.0:.2f}s)"
+        )
+
+    return durations, beat_source, "; ".join(notes)
+
+
+def _apply_audio_override(cfg: dict[str, Any], audio: bool | None) -> None:
+    """Setzt ``video.audio`` aus einem expliziten CLI-Wunsch.
+
+    ``None`` lässt die Config unangetastet, ``True``/``False`` schlägt sie. Ohne
+    diesen Schritt bliebe ``--audio`` auf einem Server mit ``video.audio: false``
+    wirkungslos - genau der Fall, in dem man den Ton zuschalten will.
+    """
+    if audio is None:
+        return
+    video = cfg.setdefault("video", {})
+    if not isinstance(video, dict):
+        video = dict(video)
+        cfg["video"] = video
+    video["audio"] = bool(audio)
+
+
 def run(
     sources: Sequence[str | Path],
     *,
@@ -961,8 +1186,14 @@ def run(
     grade: str | None = None,
     pace: str | None = None,
     lossless: bool = False,
+    audio: bool | None = None,
 ) -> RenderResult:
-    """Kompletter Pipeline-Lauf: Metadaten -> Schnitt -> Render -> Export."""
+    """Kompletter Pipeline-Lauf: Metadaten -> Schnitt -> Render -> Export.
+
+    ``audio`` überschreibt ``video.audio``: ``True`` nimmt den Originalton der
+    Rohclips mit, ``False`` exportiert stumm, ``None`` folgt der Config. Die
+    Musik wird in keinem Fall untergemischt.
+    """
     cfg = load_config(config_path)
     # Overrides explizit durchreichen, damit der Watcher nicht darauf angewiesen
     # ist, dass die Datei auf der Platte schon die richtigen Werte enthält.
@@ -977,6 +1208,7 @@ def run(
     if duration is not None:
         cfg.setdefault("video", {})
         cfg["video"]["max_duration"] = float(duration)
+    _apply_audio_override(cfg, audio)
     if grade is not None:
         cfg.setdefault("style", {})
         cfg["style"]["preset"] = str(grade).lower()
@@ -1050,48 +1282,12 @@ def run(
     if trip and not title:
         log.info("Tripname aus Ingest-Unterordner erkannt: %r", trip)
 
-    # Musikquelle auflösen: lokale Datei, Spotify URI oder Fallback-BPM
-    durations: list[float] = []
-    beat_source = "fallback"
-
-    if isinstance(music, str) and music.startswith("spotify:"):
-        # Spotify URI explizit übergeben
-        durations = _fetch_spotify_beats(music, cfg)
-        beat_source = f"spotify:{music}" if durations else "fallback"
-    elif music:
-        # Lokale MP3-Datei explizit übergeben
-        music_path = _pick_music(music, cfg)
-        if music_path is not None:
-            durations = detect_beat_durations(music_path, cut_cfg)
-            beat_source = f"beats:{music_path.name}" if durations else "fallback"
-    else:
-        # Keine CLI-Vorgabe -> Config-Hierarchie auswerten (1. Spotify, 2. music_dir)
-        spotify_cfg = get(cfg, "spotify", {}) or {}
-        if spotify_cfg.get("enabled") and spotify_cfg.get("track_uri"):
-            track_uri = spotify_cfg.get("track_uri")
-            durations = _fetch_spotify_beats(track_uri, cfg)
-            beat_source = f"spotify:{track_uri}" if durations else "fallback"
-
-        if not durations:
-            music_path = _pick_music(None, cfg)
-            if music_path is not None:
-                durations = detect_beat_durations(music_path, cut_cfg)
-                beat_source = f"beats:{music_path.name}" if durations else "fallback"
-
-    if not durations:
-        # Reiner BPM-Takt. Wichtig: das Ergebnis muss als durations-Liste
-        # weitergegeben werden - der Log-Text allein steuert nichts.
-        fallback_bpm = _get_fallback_bpm(cfg, music)
-        durations = durations_from_bpm(fallback_bpm, cut_cfg)
-        log.info(
-            "Keine echten Beats verfügbar - Takt-Fallback %.0f BPM (Beat %.2fs, Cut %.2fs)",
-            fallback_bpm,
-            60.0 / fallback_bpm if fallback_bpm else 0.0,
-            durations[0] if durations else 0.0,
-        )
-        beat_source = f"fallback:{fallback_bpm:g}bpm"
-
+    # Musikquelle auflösen: Spotify, lokale Datei oder BPM-Fallback.
+    durations, beat_source, beat_note = _resolve_beats(music, cfg, cut_cfg)
     result.beat_source = beat_source
+    result.beat_note = beat_note
+    if beat_note:
+        log.info("Beat-Quelle: %s (%s)", beat_source, beat_note)
 
     # Qualitätsanalyse einmalig über alle nutzbaren Clips. Das Ergebnis liegt
     # auf Platte (Key aus Pfad/mtime/Größe), wiederholte Läufe kosten also nur
@@ -1122,6 +1318,12 @@ def run(
         subtitle,
         result.beat_source,
     )
+    if bool(get(video_cfg, "audio", False)):
+        log.info(
+            "Audio: Originalton der Rohclips wird mitgenommen (Musik wird nicht untergemischt)"
+        )
+    else:
+        log.info("Audio: stumm (video.audio=false) - Musik kommt in Instagram dazu")
 
     now = time.time()
     base_out = expand_path(output_dir or get(cfg, "output_dir", "output"))
@@ -1277,12 +1479,14 @@ def export_reel(
         log.info(
             "Text-Overlay nur auf den ersten %d von %d Cuts", text_on_first_cuts, len(segments)
         )
+    want_audio = bool(video_cfg.get("audio", False))
     rendered = render_segments(
         segments,
         cfg,
         grade=grade,
         overlay_png=overlay,
         text_on_first_cuts=text_on_first_cuts,
+        with_audio=want_audio,
         on_error=errors,
     )
     for message in errors:
@@ -1313,16 +1517,26 @@ def export_reel(
         if threads:
             ffmpeg_params += ["-threads", str(threads)]
 
-        final.write_videofile(
-            str(partial),
-            fps=int(video_cfg.get("fps", 30)),
-            codec=str(video_cfg.get("codec", "libx264")),
-            audio=bool(video_cfg.get("audio", False)),
-            preset=preset,
-            threads=threads or None,
-            ffmpeg_params=ffmpeg_params,
-            logger=None,
-        )
+        write_kwargs: dict[str, Any] = {
+            "fps": int(video_cfg.get("fps", 30)),
+            "codec": str(video_cfg.get("codec", "libx264")),
+            "audio": bool(video_cfg.get("audio", False)),
+            "preset": preset,
+            "threads": threads or None,
+            "ffmpeg_params": ffmpeg_params,
+            "logger": None,
+        }
+        if write_kwargs["audio"]:
+            # Nur wenn wirklich eine Spur mitkommt: sonst würde moviepy eine
+            # leere Audiodatei erzeugen und -copy in den Container muxen.
+            # Instagram/WhatsApp akzeptieren nur AAC, nicht das moviepy-Default
+            # libmp3lame.
+            write_kwargs["audio_codec"] = str(video_cfg.get("audio_codec", "aac"))
+            write_kwargs["audio_bitrate"] = str(video_cfg.get("audio_bitrate", "192k"))
+            write_kwargs["audio_fps"] = int(video_cfg.get("audio_sample_rate", 44100))
+            write_kwargs["audio_nbytes"] = int(video_cfg.get("audio_nbytes", 2))
+
+        final.write_videofile(str(partial), **write_kwargs)
 
     try:
         _attempt_export(bool(video_cfg.get("lossless")))
@@ -1356,6 +1570,13 @@ def export_reel(
     # können Cuts ausgefallen sein.
     actual = probe_duration(target) or sum(s.duration for s in segments)
     log.info("Export fertig: %s (%.1fs Video)", target, actual)
+
+    if want_audio and not has_audio_stream(target):
+        log.warning(
+            "%s enthält trotz video.audio=true keine Tonspur - vermutlich "
+            "hatten die Quellen keinen Ton",
+            target.name,
+        )
 
     if not no_cover and bool(video_cfg.get("cover", True)):
         write_cover(
@@ -1436,6 +1657,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Schnitt-Tempo (fast = ~1.5s, medium = ~2.3s, slow = ~3.2s)",
     )
+    audio_group = parser.add_mutually_exclusive_group()
+    audio_group.add_argument(
+        "--audio",
+        dest="audio",
+        action="store_true",
+        default=None,
+        help="Originalton der Rohclips ins Reel übernehmen (überschreibt video.audio)",
+    )
+    audio_group.add_argument(
+        "--no-audio",
+        dest="audio",
+        action="store_false",
+        default=None,
+        help="stumm exportieren, auch wenn video.audio: true gesetzt ist",
+    )
     parser.add_argument("--dry-run", action="store_true", help="nur Schnittplan ausgeben, kein Export")
     parser.add_argument("--delete-after", action="store_true", help="Rohclips nach Export löschen")
     parser.add_argument("--lossless", action="store_true", help="verlustfrei exportieren (CRF 0, ultrafast)")
@@ -1475,6 +1711,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         grade=args.grade,
         pace=args.pace,
         lossless=args.lossless,
+        audio=args.audio,
     )
 
     if args.json:
@@ -1493,6 +1730,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "trip": result.trip,
                     "output_dir": str(result.output.parent) if result.output else None,
                     "beat_source": result.beat_source,
+                    "beat_note": result.beat_note,
                     "errors": result.errors,
                 },
                 indent=2,
