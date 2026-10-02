@@ -14,7 +14,6 @@ rechtsbündig verankert - ohne Box, mit weichem Drop-Shadow.
 from __future__ import annotations
 
 import logging
-import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
