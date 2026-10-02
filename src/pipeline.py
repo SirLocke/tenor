@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import math
+import statistics
 import subprocess
 import sys
 import time
@@ -129,7 +130,7 @@ def detect_beat_durations(music: Path, cut_cfg: Mapping[str, Any]) -> list[float
     intervals = [b - a for a, b in zip(beats, beats[1:]) if b - a > 0.05]
     if not intervals:
         return []
-    median_beat = float(sorted(intervals)[len(intervals) // 2])
+    median_beat = float(statistics.median(intervals))
     group = max(1, int(round(median_beat / target)))
     log.info(
         "Beat-Grid: Tempo ~%.0f BPM, Beat-Abstand %.2fs -> Gruppe %d (Cut ~%.2fs)",
@@ -985,7 +986,7 @@ def _fetch_spotify_beats(
     intervals = [b - a for a, b in zip(beats, beats[1:]) if b - a > 0.05]
     if not intervals:
         return None, "Spotify-Beats zu unregelmäßig"
-    median_beat = float(sorted(intervals)[len(intervals) // 2])
+    median_beat = float(statistics.median(intervals))
     group = max(1, int(round(median_beat / target)))
     durations: list[float] = []
     for start, end in zip(beats[::group], beats[::group][1:]):
