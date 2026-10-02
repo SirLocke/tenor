@@ -542,6 +542,33 @@ def check_window(
     return score
 
 
+#: Sicherheitsabstand an Anfang und Ende eines Clips in Sekunden. Dort sitzen
+#: Kameraeinstellungen, unscharfe erste Frames und abgebrochene Bewegungen - ein
+#: Cut, der genau dort beginnt oder endet, sieht im Reel kaputt aus. Der
+#: konfigurierte ``quality.edge_trim`` ist ein *Mindestwert*; dieser Wert ist
+#: die Untergrenze, solange das Material für alle geplanten Fenster reicht.
+MIN_SAFE_EDGE = 1.0
+
+
+def plan_edge(edge_trim: float, duration: float, total: float) -> float:
+    """Effektiver Rand, mit dem *alle* Fenster eines Clips geplant werden.
+
+    ``edge_trim`` ist ein Mindestabstand, kein fester Wert: passt das geplante
+    Material nicht daneben (typisch bei den 3-6-s-Clips, die im Reel landen),
+    schrumpft der Rand auf die größtmögliche Hälfte des Restmaterials. Ohne diese
+    Anpassung hätte ein einzelnes Fenster entweder über das Clip-Ende hinaus
+    geplant oder gar keine Position mehr - beides führte zu Cuts direkt am
+    Anfang bzw. Ende der Quelle.
+
+    ``edge_trim <= 0`` (Gate aus) lässt den Rand vollständig weg, dann gilt das
+    alte Verhalten ohne jeden Abstand.
+    """
+    if edge_trim <= 0.0:
+        return 0.0
+    wanted = max(edge_trim, MIN_SAFE_EDGE)
+    return max(min(wanted, max(duration - total, 0.0) / 2.0), 0.0)
+
+
 def find_highlights(
     analysis: ClipAnalysis,
     duration: float,
@@ -551,19 +578,19 @@ def find_highlights(
 ) -> list[float]:
     """Findet die besten Schnitte in einem Clip anhand der Bildqualität.
 
-    Verhindert Schnitte am Anfang und Ende des Clips (Kameraeinstellungen)
-    durch einen vergrößerten edge_trim (min. 1.0s). Sucht dann nach den
-    Fenstern mit der höchsten Schärfe und den wenigsten Belichtungsproblemen.
-    Zwei Schnitte im selben Clip müssen einen Mindestabstand haben (overlap).
+    Verhindert Schnitte am Anfang und Ende des Clips (Kameraeinstellungen) über
+    :func:`plan_edge`. Gesucht wird dann nach den Fenstern mit der höchsten
+    Schärfe und den wenigsten Belichtungsproblemen. Zwei Schnitte im selben
+    Clip müssen einen Mindestabstand haben (gap).
 
-    Fallback auf `spread_windows`, wenn der Clip zu kurz für die Suche ist.
+    Fallback auf `spread_windows`, wenn der Clip zu kurz für die Suche ist -
+    mit demselben Rand, sonst läge der Fallback genau wieder am Clip-Anfang.
     """
     if not lengths:
         return []
 
-    # Vergrößere den Rand für Highlights auf mind. 1.0 Sekunde (Kamera wackelt oft am Start/Ende)
-    safe_edge = max(edge_trim, 1.0)
     total_len = sum(lengths)
+    safe_edge = plan_edge(edge_trim, duration, total_len)
 
     # Abstand zwischen zwei Cuts aus demselben Clip
     gap = 0.5
@@ -573,7 +600,7 @@ def find_highlights(
 
     if not analysis.usable or usable < needed_span or not cfg.enabled:
         # Fallback auf einfaches Spread, wenn zu wenig Platz oder keine Analyse
-        return spread_windows(duration, lengths, edge_trim)
+        return spread_windows(duration, lengths, safe_edge)
 
     candidates: list[dict[str, Any]] = []
     # Teste alle 0.5 Sekunden ein Fenster der durchschnittlichen Länge
@@ -627,7 +654,7 @@ def find_highlights(
         if not placed:
             # Falls wir keinen Platz mehr finden, brechen wir ab und
             # delegieren komplett ans klassische Fallback
-            return spread_windows(duration, lengths, edge_trim)
+            return spread_windows(duration, lengths, safe_edge)
 
     # Wichtig: Chronologische Reihenfolge für die Pipeline!
     return sorted(chosen_starts)
@@ -643,9 +670,14 @@ def spread_windows(duration: float, lengths: list[float], edge_trim: float) -> l
     Material besser ausgeschöpft wird.
 
     Bei genau einem Cut ist das Verhalten unverändert (Mitte des Clips).
+
+    ``edge_trim`` ist ein Mindestabstand zu Anfang und Ende (Kamerainfahrt) und
+    wird über :func:`plan_edge` auf das vorhandene Material eingepasst - vorher
+    stand das erste Fenster bei knappem Material direkt auf 0,5 s.
     """
     total = sum(lengths)
-    usable = max(duration - 2.0 * edge_trim, total)
+    margin = plan_edge(edge_trim, duration, total) if lengths else 0.0
+    usable = max(duration - 2.0 * margin, total)
     if usable <= 0 or not lengths:
         return [0.0] * len(lengths)
 
@@ -655,7 +687,7 @@ def spread_windows(duration: float, lengths: list[float], edge_trim: float) -> l
     # Bei einem einzigen Cut ist das Zentrieren - verhält sich wie vorher.
     slack = max(usable - total, 0.0)
     gap = slack / (len(lengths) + 1)
-    lead = edge_trim + gap
+    lead = margin + gap
 
     starts: list[float] = []
     cursor = lead
@@ -665,11 +697,21 @@ def spread_windows(duration: float, lengths: list[float], edge_trim: float) -> l
     return starts
 
 
-def clamp_start(start: float, length: float, source_duration: float) -> float:
-    """Hält ein Fenster in die Quelldatei, ohne seine Länge zu verändern."""
+def clamp_start(
+    start: float, length: float, source_duration: float, edge: float = 0.0
+) -> float:
+    """Hält ein Fenster in die Quelldatei, ohne seine Länge zu verändern.
+
+    ``edge`` hält zusätzlich Abstand zum Anfang und Ende der Quelle. Ist der
+    Rand für dieses eine Fenster nicht passend (Clip kürzer als Rand + Fenster),
+    wird er symmetrisch auf das einzig Mögliche geschrumpft - sonst verlöre der
+    Cut seine Länge oder läge außerhalb der Datei.
+    """
     if source_duration <= 0.0:
         return max(start, 0.0)
-    return min(max(start, 0.0), max(source_duration - length, 0.0))
+    low = max(min(edge, max(source_duration - length, 0.0) / 2.0), 0.0)
+    high = max(source_duration - low - length, low)
+    return min(max(start, low), high)
 
 
 @dataclass
@@ -694,12 +736,18 @@ def plan_windows(
     *,
     source_duration: float = 0.0,
     reference: Sequence[np.ndarray] = (),
+    edge_trim: float = 0.0,
 ) -> tuple[list[WindowPlan], list[np.ndarray]]:
     """Prüft geplante Fenster gegen das Qualitäts-Gate.
 
     Pro Fenster wird zuerst die Originalposition bewertet, danach dieselbe
     Länge an den in ``search_offsets`` konfigurierten Positionen. Die erste
     Variante ohne Beanstandung gewinnt.
+
+    ``edge_trim`` ist der Mindestabstand zu Anfang und Ende der Quelle (s.
+    :func:`plan_edge`) und gilt für *jede* Suchposition: ohne ihn konnte ein
+    durchgefallenes Fenster mit ``-0.9`` bis auf 0,1 s an den Clip-Anfang
+    geschoben werden und der Kameraanlauf landete mitten im Reel.
 
     Bleiben alle Varianten durchgefallen, entscheidet die Art des Mangels:
 
@@ -743,7 +791,7 @@ def plan_windows(
 
         seen: set[float] = set()
         for offset in (0.0, *cfg.search_offsets):
-            candidate = clamp_start(start + offset, length, source_duration)
+            candidate = clamp_start(start + offset, length, source_duration, edge_trim)
             key = round(candidate, 3)
             if key in seen:
                 continue

@@ -3,15 +3,15 @@
 Automatische Video-Pipeline für den Heimserver: überwacht einen Ingest-Ordner,
 ordnet iPhone-Clips chronologisch, schneidet sie auf den Beat, versieht sie mit
 einem Dark-Film-Grading und exportiert **1080x1920 (9:16)** Reels/Shorts
-inklusive Cover-Thumbnail – standardmäßig stumm, optional mit dem Originalton
-der Clips.
+inklusive Cover-Thumbnail – stumm, mit bewusst gewählter Musik oder mit dem
+Originalton der Clips.
 
 ```
 Rohclips (MOV/MP4)                     Reels + Cover
 /srv/nas/Nils/video-cut/ingest   ──►  /srv/nas/Nils/video-cut/output
         │  watchdog + Debounce                    │
         │  ffprobe (Zeit/GPS)                     └─ 1080x1920 H.264, yuv420p, 30 fps
-        │  librosa Beat-Grid                         (stumm, mit --audio: Clip-Ton/AAC)
+        │  librosa Beat-Grid                         (Ton nur mit -m/--audio/AAC)
         └─ center-crop 9:16 → Dark-Film-LUT → rechtsbündige Typografie
 ```
 
@@ -26,7 +26,7 @@ der Ordnername unterhalb von `ingest_dir`:
 │   └── Madeira 2026/           ← Ordnername = Tripname
 │       ├── IMG_1234.MOV
 │       └── IMG_1235.MOV
-├── music/                      ← MP3 fürs Beat-Matching
+├── music/                      ← MP3s: Beat-Matching, gewählte Musik landet im Reel
 ├── .cache/                     ← zwischengespeicherte Analysen
 │   ├── geocoding.json
 │   └── quality/                ← Graustufen-Strips je Rohclip (Key aus Pfad/mtime)
@@ -80,10 +80,22 @@ Unterordner.
      künstliches Beat-Grid: Beat = 60/BPM, gruppiert auf ~`cut.target`.
      120 BPM ⇒ 0,5 s Beats ⇒ 3er-Gruppe ⇒ 1,5 s Cuts.
 
-  Die Musik wird **nie untergemischt**. Sie liefert ausschließlich den Takt
-  für den Schnittplan: das Reel ist standardmäßig stumm (die Musik kommt in
-  Instagram dazu) oder enthält mit `video.audio: true` den **Originalton der
-  Rohclips**.
+  Musik steuert **immer** den Schnitttakt. Ob sie auch *im Reel* zu hören ist,
+  entscheidet die Wahl: nur eine **bewusst gewählte** Musik wird untergemischt
+  (`-m <datei>` – auch aus dem Homelab – oder `-m auto`, das auf `music.file`
+  zeigt). Ein Lauf ohne `-m` bleibt stumm; der Automatismus
+  (`spotify.track_file`, neueste Datei aus `music_dir`) liefert weiterhin nur den
+  Takt. Genau dieser Unterschied war die Ursache für stumme Reels: die Auswahl
+  im Homelab kam als `-m` an und steuerte den Schnitt – der Export schrieb die
+  Spur aber nicht ins Video.
+- **Musik im Reel** – liegt bewusst gewählte Musik vor, wird sie unter das
+  fertige Bild gelegt: auf die Reellänge gebracht (kürzere Tracks loopen,
+  längere werden geschnitten), auf Kanalzahl und Abtastrate der übrigen Spur
+  gebracht, mit `music.gain` pegelt und über `music.fade_out` ausgeblendet. Ist
+  zusätzlich `video.audio: true` aktiv, läuft der Originalton **gedämpft
+  darunter** (`video.original_gain`, Default 0,25) – hörbar, aber nicht über der
+  Musik. Fehlt die Datei oder ist sie unlesbar, bleibt der Export stumm und
+  läuft weiter; ein kaputter Track kostet nie das ganze Video.
 - **Optionaler Originalton** – mit `video.audio: true` bzw. `--audio` wird der
   Ton der Rohclips mit exportiert (AAC, `video.audio_bitrate`, default 192 k).
   Der Ton wird als eigener Ausschnitt aus der Quelle geschnitten, nicht aus dem
@@ -183,15 +195,29 @@ Der Export und der Ton stecken in `video:`:
 
 | Key | Default | Wirkung |
 | --- | --- | --- |
-| `audio` | `false` | `true` nimmt den **Originalton der Rohclips** mit. Musik wird nie untergemischt |
+| `audio` | `false` | `true` nimmt den **Originalton der Rohclips** mit (mit Musik gedämpft auf `original_gain`) |
+| `original_gain` | `0.25` | Tonpegel des Originaltons, wenn Musik darunter liegt |
 | `audio_codec` | `aac` | AAC – das einzige Tonformat, das Instagram/WhatsApp verlässlich annehmen |
 | `audio_bitrate` | `192k` | Ton-Bitrate |
 | `audio_sample_rate` | `44100` | Abtastrate im Ziel; Quellen werden darauf normalisiert |
 | `audio_nbytes` | `2` | 2 = 16 bit |
 
 Per CLI: `--audio` erzwingt Ton, `--no-audio` erzwingt stumm – beide schlagen
-`video.audio` aus der Config. Die Musikauswahl (`-m`, `spotify.track_file`,
-`music_dir`) beeinflusst nur den **Schnitt**, nicht den Export.
+`video.audio` aus der Config. Ob Musik **im Reel** landet, entscheidet allein
+`-m`: mit `-m <datei>` oder `-m auto` wird sie untergemischt, ohne `-m` steuert
+die Musikquelle nur den **Schnitt**.
+
+Die Musik im fertigen Reel steckt in `music:`:
+
+| Key | Default | Wirkung |
+| --- | --- | --- |
+| `file` | `""` | feste Musikdatei, die `-m auto` verwendet (leer = bei `-m auto` kein Ton) |
+| `gain` | `1.0` | Pegel der Musik |
+| `fade_in` | `0.0` | Einblenden am Reel-Anfang (Sekunden, 0 = hart) |
+| `fade_out` | `1.5` | Ausblenden am Reel-Ende (Sekunden) |
+
+Kürzere Tracks loopen bis über die Reellänge, längere werden darauf geschnitten –
+der Ton darf nicht vor dem letzten Bild verstummen.
 
 Der Grading-Look steckt komplett in `style:`:
 
@@ -242,7 +268,10 @@ der ausgeschaltete Wert `255` bzw. `1.0`.
 # Einzelne Datei, explizite Musik
 .venv/bin/python -m src.pipeline -i clip.MOV -o out/ -t "Madeira" -m song.mp3
 
-# Mit Originalton der Clips (Musik wird nicht untergemischt)
+# Musik aus music.file (config.yaml)
+.venv/bin/python -m src.pipeline -i clip.MOV -m auto
+
+# Mit Originalton der Clips - Musik liegt gedämpft darunter
 .venv/bin/python -m src.pipeline -i clip.MOV -m song.mp3 --audio
 
 # Nur den Schnittplan ansehen, kein Export (legt nichts an)
@@ -268,7 +297,7 @@ Pro Aufnahmetag ein Reel, inklusive Cover:
 ```
 output/Madeira-2026/2026-09-11/
 ├── 2026-09-28_Madeira-2026_134838.mp4   H.264, yuv420p, 30 fps, 1080x1920
-│                                        (stumm, mit --audio: + AAC-Clip-Ton)
+│                                        (stumm; Ton nur mit -m/--audio)
 └── 2026-09-28_Madeira-2026_134838.jpg   Cover-Frame bei Sekunde 0.5
 ```
 
@@ -380,8 +409,10 @@ tenor/
    `video.audio` (Default `false`) steuert, ob der Originalton der Clips
    mitgeschrieben wird. Bei `true` wird pro Quellclip ein eigener
    Audio-Subclip geöffnet (`audio_fps` normalisiert, Codec `aac`), der
-   stummgeschaltete Clips korrekt an der Zeitachse auslässt. Danach das
-   Cover via `ffmpeg -ss 0.5`.
+   stummgeschaltete Clips korrekt an der Zeitachse auslässt. Ist Musik bewusst
+   gewählt, mischt `mix_music()` sie unter dieses Bild (Originalton auf
+   `video.original_gain` gedämpft) – ohne gewählte Musik bleibt der Tonpfad
+   unverändert. Danach das Cover via `ffmpeg -ss 0.5`.
 
 ## Fehlerbehandlung
 
@@ -393,6 +424,8 @@ tenor/
 | Kein Spotify-Key / Track nicht gefunden | Stille auf den BPM-Fallback, kein Abbruch |
 | Spotify blockiert Audio-Analysis (`HTTP 403`) | Klare Warnung im Log, `beat_note` in der JSON-Ausgabe; Beat-Quelle wird die lokale Datei (`spotify.track_file` bzw. neueste Datei aus `music_dir`), sonst BPM-Fallback |
 | `video.audio: true`, aber Clip ohne Audiospur | Clip wird stumm exportiert, Warnung im Log (`has_audio_stream`) |
+| Gewählte Musik fehlt oder ist unlesbar | Warnung im Log, Reel wird stumm exportiert – der Lauf bricht nicht ab |
+| Musik und Originalton haben verschiedene Kanalzahl (Mono-Clip, Stereo-MP3) | `_match_audio_channels()` gleicht die Spuren an, sonst scheiterte `CompositeAudioClip` mit einem Broadcast-Fehler |
 | Nominatim nicht erreichbar | Negativ gecacht, Lauf läuft ohne Ortsangabe weiter |
 | Kein Font ladbar | Pillow-Defaultfont als letzte Instanz |
 | Qualitätsanalyse schlägt fehl (ffmpeg, Timeout, kaputte Datei) | Gate wird für den Clip übersprungen, **kein Material geht verloren** |
@@ -434,13 +467,15 @@ Oder einmalig auf der CLI: `python -m src.pipeline -m "spotify:track:<ID>"`.
 Beat-Quelle: beats:nastelbom-cinematic-485889.mp3 (Spotify blockiert die Audio-Analysis für diese App (HTTP 403))
 ```
 
-Geholt werden nur die Beat-Zeitpunkte, nicht die Audiodatei – das Reel
-bleibt stumm, die Musik kommt in Instagram dazu. Ist Spotify blockiert,
-wird stattdessen `spotify.track_file` (bzw. die neueste Datei im `music_dir`)
-als Beat-Quelle genutzt; nur wenn auch das fehlt, greift der BPM-Fallback.
-Die Musik wird dabei **nie** unter das Reel gemischt – sie bestimmt
-ausschließlich den Schnittplan. Originalton kommt nur über `video.audio: true`
-bzw. `--audio` ins Reel (siehe [Features](#features)).
+Geholt werden nur die Beat-Zeitpunkte, nicht die Audiodatei – eine Spotify-URI
+ist damit **nie** die Tonquelle. Ist Spotify blockiert, wird stattdessen
+`spotify.track_file` (bzw. die neueste Datei im `music_dir`) als Beat-Quelle
+genutzt; nur wenn auch das fehlt, greift der BPM-Fallback. Auch diese
+Automatik steuert ausschließlich den Schnittplan; untergemischt wird Musik nur
+als **lokale Datei**, die bewusst gewählt wurde – `-m <datei>`, die
+Homelab-Auswahl oder `-m auto` (zeigt auf `music.file`). Originalton kommt über
+`video.audio: true` bzw. `--audio` ins Reel, dann gedämpft unter der Musik
+(siehe [Features](#features)).
 
 ## Tests
 

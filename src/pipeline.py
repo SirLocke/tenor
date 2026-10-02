@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import math
+import os
 import subprocess
 import sys
 import time
@@ -37,6 +38,7 @@ from .quality import (
     QualityConfig,
     analyse_clips,
     clamp_start,
+    plan_edge,
     plan_windows,
     spread_windows,
     find_highlights,
@@ -311,14 +313,21 @@ def build_segments(
 
         analysis = analyses.get(clip.path) if analyses else None
 
+        # Der Rand wird einmal je Clip aus dem *konkreten* Schnittplan berechnet
+        # und danach an Verteilung, Clamp und Gate-Suche weitergereicht. Vorher
+        # standen die drei Stellen auf unterschiedlichen Werten, sodass ein
+        # durchgefallenes Fenster bis 0,9 s in die Kameraeinfahrt geschoben
+        # werden konnte und der erste Cut bei 0,57 s begann.
+        edge = plan_edge(edge_trim, source_duration, sum(wanted))
+
         if gate is not None and analysis is not None:
-            starts = find_highlights(analysis, source_duration, wanted, gate, edge_trim)
+            starts = find_highlights(analysis, source_duration, wanted, gate, edge)
         else:
-            starts = spread_windows(source_duration, wanted, edge_trim)
+            starts = spread_windows(source_duration, wanted, edge)
 
         windows = []
         for start, length in zip(starts, wanted):
-            start = clamp_start(start, length, source_duration)
+            start = clamp_start(start, length, source_duration, edge)
             windows.append((start, start + length))
 
         if gate is not None and (analysis is None or not analysis.usable):
@@ -331,6 +340,7 @@ def build_segments(
             gate or QualityConfig(enabled=False),
             source_duration=source_duration,
             reference=history,
+            edge_trim=edge,
         )
 
         planned_seconds = sum(end - start for start, end in windows)
@@ -679,12 +689,173 @@ def render_segments(
 
 
 def _close_all(clips: Sequence[Any]) -> None:
-    """Schließt Clips und ignoriert Fehler (z. B. bereits geschlossene Reader)."""
+    """Schließt Clips und ignoriert Fehler (z. B. bereits geschlossene Reader).
+
+    Ein moviepy-Clip ist selbst slicebar (``clip[start:end]``). Wird ein
+    einzelner Clip statt einer Liste übergeben, iteriert diese Schleife über
+    seine *Frames* statt über Clips - der Aufruf rendert dann endlos Samples
+    und blockiert. Deshalb wird hier auf eine Liste normalisiert.
+    """
+    if clips is None:
+        return
+    # Eine Liste/Tupel ist die Normalform; alles andere (inkl. eines einzelnen
+    # Clips) wird zu einem Ein-Element-Container.
+    if not isinstance(clips, (list, tuple)):
+        clips = [clips]  # type: ignore[assignment]
     for clip in clips:
+        if clip is None:
+            continue
         try:
             clip.close()
         except Exception:  # pragma: no cover
             pass
+
+
+def _match_audio_channels(clip: Any, nchannels: int) -> Any:
+    """Bringt eine Tonspur auf eine feste Kanalzahl.
+
+    ``CompositeAudioClip`` addiert die Teile direkt als Numpy-Arrays. Ein
+    Mono-Originalton unter einer Stereo-Musik scheitert dabei mit
+    ``operands could not be broadcast together``: der Mono-Teil liefert
+    ``(n,)``, der Stereo-Teil ``(n, 2)``. Im Reel-Export fällt genau das auf,
+    weil iPhone-Clips meist mono aufgenommen sind und MP3s stereo sind.
+    """
+    current = int(getattr(clip, "nchannels", 1) or 1)
+    if current == nchannels:
+        return clip
+
+    get = clip.get_frame
+
+    def widen(t: Any) -> Any:
+        if current == 1:
+            # [..., None] statt np.repeat direkt: auf 1-D wiederholt np.repeat
+            # die Samples und erzeugt die doppelte Länge statt einer Kanalachse.
+            return np.repeat(get(t)[..., None], nchannels, axis=-1)
+        return get(t).mean(axis=-1, keepdims=True)
+
+    matched = clip.with_updated_frame_function(widen)
+    # `with_updated_frame_function` tauscht nur die Frame-Funktion. Ohne dieses
+    # Nachziehen meldet die Spur weiter ihre alte Kanalzahl, und
+    # `CompositeAudioClip` rechnet die Kanalzahl aus den Teilen hoch - der
+    # gemischte Ton bliebe dann als Mono im Reel.
+    matched.nchannels = nchannels
+    return matched
+
+
+def mix_music(
+    video: Any,
+    music: str | Path,
+    cfg: Mapping[str, Any],
+    video_cfg: Mapping[str, Any] | None = None,
+) -> Any | None:
+    """Legt eine Musikspur unter das gerenderte Reel.
+
+    Bewusst gewählte Musik (``-m``, Homelab-Auswahl, ``music.file``) soll im
+    fertigen Reel hörbar sein - vorher steuerte sie nur den Schnitttakt und
+    das Ergebnis war stumm. Ist der Originalton aktiv, läuft er gedämpft
+    darunter (``video.original_gain``, Default 0,25).
+
+    moviepy 2.x wird hier bewusst über die v2-Namen gebaut: ``moviepy.editor``
+    existiert in 2.x nicht mehr, und ``volumex``/``subclip``/``set_audio``/
+    ``.fx()`` gibt es dort ebenfalls nicht mehr. Der alte WIP-Stand rief genau
+    diese v1-Namen auf und wäre mit ``ModuleNotFoundError`` gescheitert.
+
+    Gibt ``None`` zurück, wenn die Datei fehlt oder moviepy die Spur nicht
+    öffnen konnte - der Export läuft dann stumm weiter, statt zu scheitern.
+    """
+    path = Path(os.path.expanduser(str(music)))
+    if not path.is_file():
+        log.warning("Musikdatei nicht gefunden, Reel bleibt stumm: %s", path)
+        return None
+
+    try:
+        from moviepy import AudioFileClip, CompositeAudioClip
+        from moviepy.audio.fx import AudioFadeIn, AudioFadeOut, AudioLoop
+    except ImportError as exc:  # pragma: no cover
+        log.warning("moviepy-Audio nicht verfügbar (%s) - Reel bleibt stumm", exc)
+        return None
+
+    music_cfg = get(cfg, "music", {}) or {}
+    video_opts = video_cfg if video_cfg is not None else (get(cfg, "video", {}) or {})
+
+    try:
+        track = AudioFileClip(str(path))
+    except Exception as exc:
+        log.warning("Musikdatei %s nicht lesbar (%s) - Reel bleibt stumm", path.name, exc)
+        return None
+
+    try:
+        target = float(video.duration or 0.0)
+        if target <= 0.0:
+            return None
+
+        source_duration = float(track.duration or 0.0)
+        if source_duration <= 0.0:
+            log.warning("Musikdatei %s hat keine Dauer - Reel bleibt stumm", path.name)
+            return None
+
+        # Kürzer als das Reel -> in Schleifen bis über die Reel-Länge hinaus;
+        # danach auf die exakte Länge zuschneiden. Die alte Logik vervielfachte
+        # statt zu loopen, was den Track an jeder Grenze abrupt abschnitt.
+        if source_duration < target:
+            loops = int(math.ceil(target / source_duration))
+            track = track.with_effects([AudioLoop(n_loops=loops)])
+        if float(track.duration or 0.0) > target:
+            track = track.subclipped(0.0, target)
+
+        music_gain = float(music_cfg.get("gain", 1.0))
+        if abs(music_gain - 1.0) > 1e-6:
+            track = track.with_volume_scaled(music_gain)
+
+        parts: list[Any] = []
+        original = getattr(video, "audio", None)
+        original_gain = float(video_opts.get("original_gain", 0.25))
+        if original is not None:
+            # Originalton bleibt hörbar (Atmosphäre, Sprache), verschwindet aber
+            # nicht hinter der Musik.
+            if abs(original_gain - 1.0) > 1e-6:
+                original = original.with_volume_scaled(original_gain)
+            parts.append(original)
+        parts.append(track)
+
+        fade_in = float(music_cfg.get("fade_in", 0.0))
+        fade_out = float(music_cfg.get("fade_out", 1.5))
+
+        # Kanalzahl und Abtastrate müssen vor dem Addieren zusammenpassen, sonst
+        # bricht CompositeAudioClip mit einem Broadcast-Fehler ab und der Export
+        # bliebe stumm (siehe _match_audio_channels).
+        channels = max(int(getattr(p, "nchannels", 1) or 1) for p in parts)
+        rate = max(int(getattr(p, "fps", 0) or 0) for p in parts)
+        if channels > 1:
+            parts = [_match_audio_channels(p, channels) for p in parts]
+        if rate > 0:
+            parts = [p.with_fps(rate) for p in parts]
+
+        mixed = track if len(parts) == 1 else CompositeAudioClip(parts)
+        if fade_in > 0.0:
+            mixed = mixed.with_effects([AudioFadeIn(fade_in)])
+        if fade_out > 0.0 and target > fade_out:
+            mixed = mixed.with_effects([AudioFadeOut(fade_out)])
+
+        log.info(
+            "Musik %r gemischt (Originalton bei %.0f%%, Musik bei %.0f%%, "
+            "%d Kanal/%d Hz, Ausblende %.1fs)",
+            path.name,
+            original_gain * 100.0 if original is not None else 0.0,
+            music_gain * 100.0,
+            channels,
+            rate,
+            fade_out,
+        )
+        result = video.with_audio(mixed.with_duration(target))
+        # Der Musik-Reader gehört zum Export-Cleanup, sonst bleibt ein
+        # ffmpeg-Prozess bis zum nächsten GC hängen - dasselbe Muster wie
+        # ``tenor_sources`` im Rendern.
+        result.tenor_music_reader = track  # type: ignore[attr-defined]
+        return result
+    except Exception as exc:
+        log.warning("Musik konnte nicht gemischt werden (%s) - Reel bleibt stumm", exc)
+        return None
 
 
 def make_overlay_array(cfg: Mapping[str, Any], title: str, subtitle: str) -> np.ndarray:
@@ -891,12 +1062,34 @@ def unique_path(directory: Path, stem: str, suffix: str) -> Path:
 MUSIC_EXTENSIONS = (".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus")
 
 
+def _explicit_music_path(hint: str, cfg: Mapping[str, Any]) -> Path | None:
+    """Ein ``-m``-Hinweis auf eine echte Datei abbilden.
+
+    ``auto`` ist kein Dateiname, sondern der Wunsch "nimm ``music.file`` aus der
+    Config" - ohne diesen Zweig suchte der Beat-Auflöser vergeblich nach einer
+    Datei namens ``auto`` und fiel auf 120 BPM zurück, während der Export
+    durchaus die konfigurierte Musik gemischt hätte.
+
+    Gibt ``None`` zurück, wenn der Hinweis auf nichts Brauchbares zeigt; das
+    Loggen übernehmen die Aufrufer, weil beide Stufen unterschiedlich
+    gewichten (Beat-Quelle vs. Ton im Reel).
+    """
+    if hint == "auto":
+        music_cfg = get(cfg, "music") or {}
+        configured = str(music_cfg.get("file") or "").strip()
+        if not configured:
+            return None
+        return expand_path(configured)
+    return expand_path(hint)
+
+
 def _pick_music(music: str | Path | None, cfg: Mapping[str, Any]) -> Path | None:
     """Bestimmt die lokale Audiodatei für das Beat-Matching.
 
     Reihenfolge:
 
-    1. expliziter Pfad (``-m song.mp3`` oder ``music.file`` aus der Config)
+    1. expliziter Pfad (``-m song.mp3``, ``-m auto`` -> ``music.file`` aus der
+       Config)
     2. ``spotify.track_file`` - Datei, die zum konfigurierten Track gehört,
        falls Spotify den Track nicht selbst analysieren darf
     3. die *neueste* Audiodatei in ``music_dir``
@@ -907,10 +1100,17 @@ def _pick_music(music: str | Path | None, cfg: Mapping[str, Any]) -> Path | None
     zugeordnet werden. Ist beides gesetzt, gewinnt die lokal zugeordnete Datei.
     """
     if music:
-        path = Path(str(music)).expanduser()
-        if path.is_file():
+        hint = str(music)
+        path = _explicit_music_path(hint, cfg)
+        if path is not None and path.is_file():
             return path
-        log.warning("Musikdatei nicht gefunden: %s", path)
+        if hint == "auto":
+            log.warning(
+                "music.file ist leer oder zeigt auf keine Datei - kein Beat-Matching "
+                "aus der Konfiguration"
+            )
+        else:
+            log.warning("Musikdatei nicht gefunden: %s", hint)
         return None
 
     # 1. Datei, die zum ausgewählten Spotify-Track gehört.
@@ -1154,6 +1354,34 @@ def _resolve_beats(
     return durations, beat_source, "; ".join(notes)
 
 
+def _resolve_music_file(music: str | Path | None, cfg: Mapping[str, Any]) -> Path | None:
+    """Lokale Audiodatei, die als *Ton* ins Reel gemischt werden soll.
+
+    Bewusst gewählt heißt: ``-m song.mp3`` (bzw. die Homelab-Auswahl) oder
+    ``-m auto``, das auf ``music.file`` aus der Config zeigt. Die automatisch
+    ermittelte Quelle (``spotify.track_file``, neueste Datei im ``music_dir``)
+    wird hier bewusst *nicht* zurückgegeben: ein Lauf ohne ``-m`` hat niemanden
+    nach Musik gefragt, da soll es still bleiben.
+
+    Eine Spotify-URI ist kein Ton - nur ihre Beat-Liste wird genutzt. Für Ton
+    muss eine lokale Datei dazukommen (``-m spotify:track:…`` reicht nicht).
+    """
+    if not music:
+        return None
+    hint = str(music)
+    if hint.startswith("spotify:"):
+        return None
+
+    path = _explicit_music_path(hint, cfg)
+    if path is None:
+        return None
+    if not path.is_file():
+        if hint == "auto":
+            log.warning("music.file nicht gefunden: %s", path)
+        return None
+    return path
+
+
 def _apply_audio_override(cfg: dict[str, Any], audio: bool | None) -> None:
     """Setzt ``video.audio`` aus einem expliziten CLI-Wunsch.
 
@@ -1289,6 +1517,15 @@ def run(
     if beat_note:
         log.info("Beat-Quelle: %s (%s)", beat_source, beat_note)
 
+    # Für den *Ton* zählt nur bewusst Gewähltes. Ohne diesen zweiten Schritt
+    # steuerte die Musik nur den Schnitt und das fertige Reel blieb stumm,
+    # obwohl im Homelab ein Track ausgewählt war.
+    music_file = _resolve_music_file(music, cfg)
+    if music_file is not None:
+        log.info("Musik für den Export: %s", music_file)
+    elif music and not str(music).startswith("spotify:"):
+        log.info("Musik %r liefert nur den Schnitttakt (kein Ton im Reel)", music)
+
     # Qualitätsanalyse einmalig über alle nutzbaren Clips. Das Ergebnis liegt
     # auf Platte (Key aus Pfad/mtime/Größe), wiederholte Läufe kosten also nur
     # noch einen Blick in die Datei.
@@ -1318,12 +1555,15 @@ def run(
         subtitle,
         result.beat_source,
     )
-    if bool(get(video_cfg, "audio", False)):
-        log.info(
-            "Audio: Originalton der Rohclips wird mitgenommen (Musik wird nicht untergemischt)"
-        )
+    if music_file is not None:
+        if bool(get(video_cfg, "audio", False)):
+            log.info("Audio: Musik wird gemischt, Originalton läuft gedämpft darunter")
+        else:
+            log.info("Audio: Musik wird ins Reel gemischt (kein Originalton)")
+    elif bool(get(video_cfg, "audio", False)):
+        log.info("Audio: Originalton der Rohclips wird mitgenommen")
     else:
-        log.info("Audio: stumm (video.audio=false) - Musik kommt in Instagram dazu")
+        log.info("Audio: stumm (video.audio=false, keine Musik gewählt)")
 
     now = time.time()
     base_out = expand_path(output_dir or get(cfg, "output_dir", "output"))
@@ -1381,6 +1621,7 @@ def run(
             dry_run=dry_run,
             no_cover=no_cover,
             errors_seen=result.errors,
+            music=music_file,
         )
         if target is None:
             continue
@@ -1430,6 +1671,7 @@ def export_reel(
     when: float,
     dry_run: bool = False,
     no_cover: bool = False,
+    music: str | Path | None = None,
     errors_seen: list[str] | None = None,
 ) -> Path | None:
     """Rendert und exportiert einen Satz von Cuts als ein Reel.
@@ -1499,9 +1741,19 @@ def export_reel(
 
     errors_seen.extend(errors)
     final = rendered[0]
+    music_mixed = False
+    if music is not None:
+        mixed = mix_music(final, music, cfg, video_cfg)
+        if mixed is not None:
+            final = mixed
+            music_mixed = True
 
     def _attempt_export(is_lossless: bool) -> None:
         ffmpeg_params = ["-pix_fmt", str(video_cfg.get("pixel_format", "yuv420p"))]
+        # Eine gemischte Musikspur ist Ton im fertigen Reel und braucht deshalb
+        # dieselben Codec-Parameter wie der Originalton - sonst schrieb moviepy
+        # stumm bzw. mit libmp3lame und Instagram hätte nichts abzuspielen.
+        with_track = bool(want_audio) or bool(getattr(final, "audio", None) is not None)
         crf = video_cfg.get("crf")
         preset = str(video_cfg.get("preset", "medium"))
 
@@ -1520,7 +1772,9 @@ def export_reel(
         write_kwargs: dict[str, Any] = {
             "fps": int(video_cfg.get("fps", 30)),
             "codec": str(video_cfg.get("codec", "libx264")),
-            "audio": bool(video_cfg.get("audio", False)),
+            # `video.audio` entscheidet über den *Originalton*; eine gemischte
+            # Musikspur macht das Reel aber unabhängig davon hörbar.
+            "audio": bool(video_cfg.get("audio", False)) or with_track,
             "preset": preset,
             "threads": threads or None,
             "ffmpeg_params": ffmpeg_params,
@@ -1564,6 +1818,7 @@ def export_reel(
     finally:
         _close_all([final])
         _close_all(getattr(final, "tenor_sources", []) or [])
+        _close_all([getattr(final, "tenor_music_reader", None)])
 
     partial.replace(target)
     # Tatsächliche Dauer aus der fertigen Datei, nicht aus dem Plan: es
@@ -1571,12 +1826,21 @@ def export_reel(
     actual = probe_duration(target) or sum(s.duration for s in segments)
     log.info("Export fertig: %s (%.1fs Video)", target, actual)
 
-    if want_audio and not has_audio_stream(target):
-        log.warning(
-            "%s enthält trotz video.audio=true keine Tonspur - vermutlich "
-            "hatten die Quellen keinen Ton",
-            target.name,
-        )
+    if (want_audio or music_mixed) and not has_audio_stream(target):
+        if music_mixed:
+            # Genau der Fall, den der Nutzer gemeldet hat: Musik war gewählt,
+            # das Ergebnis war trotzdem stumm.
+            log.error(
+                "%s enthält trotz gemischter Musik keine Tonspur - der Ton "
+                "wurde nicht geschrieben",
+                target.name,
+            )
+        else:
+            log.warning(
+                "%s enthält trotz video.audio=true keine Tonspur - vermutlich "
+                "hatten die Quellen keinen Ton",
+                target.name,
+            )
 
     if not no_cover and bool(video_cfg.get("cover", True)):
         write_cover(
@@ -1632,7 +1896,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-i", "--input", nargs="+", help="Eingangsdatei(en) oder -ordner")
     parser.add_argument("-o", "--output", help="Ausgabeordner (Default: output_dir aus config.yaml)")
     parser.add_argument("-t", "--title", help="Titelzeile des Overlays, z. B. 'Madeira 2026'")
-    parser.add_argument("-m", "--music", help="MP3 für Beat-Matching")
+    parser.add_argument(
+        "-m",
+        "--music",
+        help=(
+            "Musikdatei: liefert den Takt UND landet im Reel. "
+            "'auto' nimmt music.file aus der Config. Ohne -m bleibt das Reel "
+            "stumm und die Musikquelle steuert nur den Schnitt."
+        ),
+    )
     parser.add_argument("-c", "--config", help="Pfad zur config.yaml")
     parser.add_argument("--no-cover", action="store_true", help="kein Cover-Thumbnail erzeugen")
     parser.add_argument("--no-geo", action="store_true", help="Reverse-Geocoding überspringen")

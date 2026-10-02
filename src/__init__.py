@@ -44,6 +44,15 @@ DEFAULTS: dict[str, Any] = {
     "output_dir": "/srv/nas/Nils/video-cut/output",
     "music_dir": "/srv/nas/Nils/video-cut/music",
     "extensions": [".mov", ".mp4", ".m4v", ".hevc", ".h265"],
+    # Musik, die als *Ton* ins Reel gemischt wird. Ohne `file` wird nichts
+    # gemischt - die Auswahl im Homelab kommt als `-m` daher. `original_gain`
+    # legt fest, wie laut der Originalton der Clips unter der Musik bleibt.
+    "music": {
+        "file": "",
+        "gain": 1.0,
+        "fade_in": 0.0,
+        "fade_out": 1.5,
+    },
     "video": {
         "width": 1080,
         "height": 1920,
@@ -52,9 +61,12 @@ DEFAULTS: dict[str, Any] = {
         "crf": 19,
         "preset": "medium",
         "pixel_format": "yuv420p",
+        # Tonpegel des Clip-Originaltons, wenn Musik darunter gemischt wird.
+        "original_gain": 0.25,
         # Audio ist ein Opt-in: mit ``true`` wandert der Originalton der
-        # Rohclips in das Reel. Musik wird nie untergemischt - sie dient
-        # ausschliesslich der Beat-Schnittplanung.
+        # Rohclips in das Reel. Musik wird nur bei *bewusster* Wahl
+        # (``-m``, Homelab-Auswahl, ``music.file``) untergemischt und der
+        # Originalton läuft dann gedämpft darunter.
         "audio": False,
         "audio_codec": "aac",
         "audio_bitrate": "192k",

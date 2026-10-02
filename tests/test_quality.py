@@ -24,12 +24,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.metadata import ClipInfo  # noqa: E402
 from src.pipeline import build_segments  # noqa: E402
 from src.quality import (  # noqa: E402
+    MIN_SAFE_EDGE,
     SIGNATURE_SIZE,
     ClipAnalysis,
     QualityConfig,
     WindowPlan,
     analyse_clips,
     check_window,
+    clamp_start,
+    plan_edge,
     plan_windows,
     signature_distance,
     spread_windows,
@@ -136,6 +139,118 @@ class TestSpreadWindows:
     def test_empty_input(self) -> None:
         assert spread_windows(10.0, [], 0.25) == []
         assert spread_windows(0.0, [1.5], 0.0) == [0.0]
+
+
+# --------------------------------------------------------------------------- #
+# Rand-Schutz: kein Cut in der Kamera-Infahrt, keine Knappheit am Ende
+# --------------------------------------------------------------------------- #
+class TestEdgeProtection:
+    """Regression: im letzten Reel begann ein Cut bei 0,57 s.
+
+    Drei Stellen rechneten vorher mit *verschiedenen* Werten: die Verteilung
+    nutzte den rohen ``edge_trim`` (0,25 s), ``find_highlights`` die fest
+    verdoppelte Untergrenze (1,0 s), und ``plan_windows`` gar keinen Rand -
+    ein durchgefallenes Fenster konnte per Such-Offset um 0,9 s nach vorn in
+    die Kamerainfahrt geschoben werden. Jetzt gibt es genau eine Regel.
+    """
+
+    def test_plan_edge_uses_the_safe_floor(self) -> None:
+        # 0,25 s konfiguriert, aber die Kamera wackelt länger -> 1,0 s.
+        assert plan_edge(0.25, 60.0, 3.0) == MIN_SAFE_EDGE
+        # Ohne Gate (edge_trim 0) bleibt alles wie vorher.
+        assert plan_edge(0.0, 60.0, 3.0) == 0.0
+
+    def test_plan_edge_shrinks_when_material_is_tight(self) -> None:
+        # 1,5 s Material in einem 3-s-Clip: höchstens 0,75 s Rand, sonst
+        # gäbe es kein Fenster mehr.
+        assert plan_edge(0.25, 3.0, 1.5) == pytest.approx(0.75)
+        # Genau das Material, das gar keinen Rand mehr erlaubt.
+        assert plan_edge(0.25, 1.5, 1.5) == 0.0
+        assert plan_edge(0.25, 2.0, 3.0) == 0.0
+
+    def test_spread_windows_respect_the_computed_margin(self) -> None:
+        for duration, lengths in [
+            (3.0, [1.5]),
+            (3.5, [1.5]),
+            (4.4, [1.5, 1.5]),
+            (5.0, [1.5, 1.5]),
+            (10.0, [1.5, 1.5]),
+            (10.0, [1.5] * 4),
+        ]:
+            margin = plan_edge(0.25, duration, sum(lengths))
+            starts = spread_windows(duration, lengths, 0.25)
+            assert len(starts) == len(lengths)
+            for start, length in zip(starts, lengths):
+                assert start >= margin - 1e-6, (duration, lengths, start, margin)
+                assert start + length <= duration - margin + 1e-6, (
+                    duration, lengths, start + length, margin,
+                )
+
+    def test_find_highlights_fallback_keeps_the_margin(self) -> None:
+        """Ohne verwertbare Analyse greift der Spread - mit demselben Rand."""
+        # Zu kurz für die Highlight-Suche: der Fallback muss den Rand wahren.
+        starts = find_highlights(_analysis(duration=3.0, frames=12), 3.0, [1.5],
+                                 QualityConfig(enabled=True), 0.25)
+        assert starts[0] >= plan_edge(0.25, 3.0, 1.5) - 1e-6
+
+    def test_clamp_start_holds_the_edge(self) -> None:
+        # Start und Ende werden symmetrisch gehalten.
+        assert clamp_start(0.1, 1.5, 10.0, 1.0) == pytest.approx(1.0)
+        assert clamp_start(9.9, 1.5, 10.0, 1.0) == pytest.approx(7.5)
+        # Ohne Rand bleibt das alte Verhalten.
+        assert clamp_start(0.1, 1.5, 10.0, 0.0) == pytest.approx(0.1)
+        # Rand unmoeglich (Clip kuerzer als Rand + Fenster): Laenge bleibt,
+        # Fenster passt weiterhin in die Datei.
+        assert clamp_start(0.1, 1.5, 2.0, 1.0) == pytest.approx(0.25)
+        assert clamp_start(0.1, 1.5, 2.0, 1.0) + 1.5 <= 2.0 + 1e-6
+
+    def test_gate_never_shifts_into_the_camera_start(self) -> None:
+        """Der eigentliche Fund: Such-Offsets landeten bei 0,1 s.
+
+        Alle Positionen sind schlecht (unscharfes Material), also greift
+        ``keep_imperfect`` und das beste Fenster bleibt liegen - aber es darf
+        den Rand nicht durchbrechen.
+        """
+        cfg = QualityConfig(
+            enabled=True,
+            min_sharpness=1e9,  # nichts ist scharf genug -> keep_imperfect
+            keep_imperfect=True,
+            search_offsets=(0.3, -0.3, 0.6, -0.6, 0.9, -0.9),
+        )
+        analysis = _analysis(duration=10.0, frames=40, sharpness=10.0)
+        plans, _ = plan_windows(
+            analysis,
+            [(1.2, 2.7)],
+            cfg,
+            source_duration=10.0,
+            edge_trim=MIN_SAFE_EDGE,
+        )
+        assert len(plans) == 1
+        plan = plans[0]
+        assert plan.kept
+        assert plan.start >= MIN_SAFE_EDGE - 1e-6, plan.start
+        assert plan.end <= 10.0 - MIN_SAFE_EDGE + 1e-6, plan.end
+
+    @pytest.mark.parametrize("duration", [3.0, 3.5, 4.4, 5.0, 6.0, 10.0, 20.0])
+    def test_build_segments_keeps_every_cut_off_the_edges(self, duration: float) -> None:
+        cfg = QualityConfig(enabled=True, edge_trim=0.25)
+        clips = [ClipInfo(path=Path("x.mov"), duration=duration)]
+        segments = build_segments(clips, {"target_min": 1.4}, {},
+                                  durations=[1.5], quality_cfg=cfg, analyses={})
+        assert segments
+        total = sum(s.duration for s in segments)
+        margin = plan_edge(0.25, duration, total)
+        assert segments[0].start >= margin - 1e-6, (duration, segments[0])
+        assert segments[-1].end <= duration - margin + 1e-6, (duration, segments[-1])
+
+    def test_disabled_gate_keeps_the_legacy_positions(self) -> None:
+        """Ohne Gate bleibt die alte Verteilung inkl. Rand 0 s."""
+        clips = [ClipInfo(path=Path("x.mov"), duration=3.0)]
+        segments = build_segments(clips, {"target_min": 1.4}, {},
+                                  durations=[1.5],
+                                  quality_cfg=QualityConfig(enabled=False), analyses={})
+        assert segments
+        assert segments[0].start == pytest.approx(0.75, abs=0.02)
 
 
 class TestBuildSegmentsPositions:

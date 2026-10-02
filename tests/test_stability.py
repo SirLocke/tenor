@@ -23,11 +23,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import DEFAULTS  # noqa: E402
 from src.pipeline import (  # noqa: E402
+    _close_all,
     _get_fallback_bpm,
+    _match_audio_channels,
     _pick_music,
+    _resolve_music_file,
     _safe_bpm,
     build_parser,
     durations_from_bpm,
+    mix_music,
 )
 from src.spotify_beats import extract_track_id  # noqa: E402
 from src.watcher import (  # noqa: E402
@@ -528,6 +532,267 @@ def test_watcher_audio_flag_reaches_pipeline(tmp_path: Path) -> None:
         pipeline_module.run = original  # type: ignore[assignment]
 
     assert captured["audio"] is True
+
+
+# --------------------------------------------------------------------------- #
+# Musik im fertigen Reel
+# --------------------------------------------------------------------------- #
+# Regression: im Homelab wurde ein Track ausgewählt, das Reel war stumm. Zwei
+# Ursachen, beide hier festgenagelt:
+#   1. Der Export kannte nur `video.audio` (Originalton). Eine gemischte
+#      Musikspur wurde nicht als Ton erkannt, also nicht mit AAC geschrieben.
+#   2. Der WIP-Code benutzte die moviepy-1.x-Namen (`moviepy.editor`,
+#      `.volumex`, `.set_audio`), die es in 2.x nicht mehr gibt.
+
+
+def _music_file(tmp_path: Path, seconds: float = 1.5, freq: int = 440) -> Path:
+    """Echte Audiodatei per ffmpeg - ein synthetischer Clip reicht nicht,
+    weil genau der Leseweg aus moviepy geprüft wird.
+
+    ``aevalsrc`` statt ``sine``: der ``sine``-Filter schreibt hier mit rund
+    0,125 Amplitude und moviepy kommt mit einem weiteren Faktor 1/sqrt(2) darunter
+    - Pegel, die nichts mit dem Mischen zu tun haben, aber jede absolute
+    Schwelle in diesen Tests wackeln ließen. 0,9 Amplitude gibt einen Ton, der
+    unabhängig von moviepy- und ffmpeg-Version klar im hörbaren Bereich bleibt.
+    """
+    import subprocess
+
+    target = tmp_path / f"song-{seconds}-{freq}.wav"
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+         "-i", f"aevalsrc=0.9*sin(2*PI*{freq}*t):s=44100:d={seconds}", str(target)],
+        check=True,
+        capture_output=True,
+    )
+    return target
+
+
+def _silent_video(duration: float = 3.0):
+    import numpy as np
+    from moviepy import ImageClip
+
+    array = np.full((64, 64, 3), 120, dtype=np.uint8)
+    return ImageClip(array, duration=duration).with_fps(30)
+
+
+def _rms(clip, start: float, end: float, fps: int = 8000) -> float:
+    """Effektiver Pegel eines Zeitfensters, ohne den ganzen Clip zu rendern.
+
+    ``subclipped`` verschiebt die Zeitbasis: der Ausschnitt startet bei ``t=0``
+    und liest intern ``absolut = t + start``. Deshalb wird hier die *lokale*
+    Zeit abgefragt - mit ``start + i / fps`` läge die Abfrage um ``start`` zu
+    weit hinten und der Ausschnitt lief ins Leere (bei Fenstern am Clip-Ende
+    komplett aus dem Material heraus).
+    """
+    import numpy as np
+
+    section = clip.subclipped(start, end)
+    count = max(int(round((end - start) * fps)), 1)
+    samples = np.array([np.asarray(section.get_frame(i / fps), dtype=float)
+                        for i in range(count)])
+    return float(np.sqrt((samples**2).mean()))
+
+
+def test_selected_music_ends_up_in_the_reel(tmp_path: Path) -> None:
+    """Der Kern der Meldung: gewaehlte Musik muss hoerbar sein."""
+    song = _music_file(tmp_path)
+    mixed = mix_music(_silent_video(), song, {"music": {"gain": 1.0, "fade_out": 0.0}})
+
+    assert mixed is not None
+    assert mixed.audio is not None
+    assert mixed.audio.duration == pytest.approx(3.0)
+    assert _rms(mixed.audio, 0.2, 0.8) > 0.1
+
+
+def test_music_loops_to_cover_the_reel(tmp_path: Path) -> None:
+    """1,5 s Musik auf ein 3-s-Reel: muss loopen, sonst endet der Ton mitten drin."""
+    song = _music_file(tmp_path, seconds=1.5)
+    mixed = mix_music(_silent_video(duration=3.0), song, {"music": {"fade_out": 0.0}})
+    assert mixed is not None and mixed.audio is not None
+    # Auch hinter der Loop-Grenze ist noch Ton.
+    assert _rms(mixed.audio, 1.6, 2.2) > 0.1
+    assert _rms(mixed.audio, 2.4, 3.0) > 0.1
+
+
+def test_music_longer_than_reel_is_trimmed(tmp_path: Path) -> None:
+    song = _music_file(tmp_path, seconds=20.0)
+    mixed = mix_music(_silent_video(duration=3.0), song, {"music": {"fade_out": 0.0}})
+    assert mixed is not None and mixed.audio is not None
+    assert mixed.audio.duration == pytest.approx(3.0)
+
+
+def test_music_fades_out_at_the_end(tmp_path: Path) -> None:
+    song = _music_file(tmp_path, seconds=1.5)
+    mixed = mix_music(_silent_video(duration=4.0), song, {"music": {"fade_out": 1.0}})
+    assert mixed is not None and mixed.audio is not None
+    assert _rms(mixed.audio, 0.2, 0.6) > 0.1
+    assert _rms(mixed.audio, 3.95, 4.0) < 0.02
+
+
+def test_original_audio_is_ducked_under_music(tmp_path: Path) -> None:
+    """--audio plus Musik: Originalton bleibt hoerbar, aber leise."""
+    import numpy as np
+    from moviepy import AudioClip
+
+    song = _music_file(tmp_path, seconds=1.5)
+    video = _silent_video(duration=3.0).with_audio(
+        AudioClip(lambda t: np.sin(2 * np.pi * 220 * t), duration=3.0, fps=44100)
+    )
+    cfg = {"music": {"gain": 0.0, "fade_out": 0.0}, "video": {"original_gain": 0.25}}
+
+    ducked = mix_music(video, song, cfg)
+    loud = mix_music(video, song, {"music": {"gain": 0.0, "fade_out": 0.0},
+                                  "video": {"original_gain": 1.0}})
+    assert ducked is not None and loud is not None
+    # Bei Gain 0 hört man nur den Originalton: 0,25 ist rund ein Viertel.
+    assert _rms(ducked.audio, 0.5, 1.0) == pytest.approx(_rms(loud.audio, 0.5, 1.0) * 0.25,
+                                                         rel=0.02)
+
+
+def test_mix_uses_moviepy_v2_api_only(tmp_path: Path) -> None:
+    """moviepy 2.x: `moviepy.editor`, `.volumex`, `.set_audio` existieren nicht.
+
+    Der alte Stand scheiterte genau daran - mit `ModuleNotFoundError`, was als
+    "Reel ohne Musik" endete.
+    """
+    import moviepy
+
+    assert not hasattr(moviepy, "editor"), "moviepy 2.x hat kein moviepy.editor"
+
+    song = _music_file(tmp_path)
+    video = _silent_video(duration=3.0)
+    mixed = mix_music(video, song, {"music": {"gain": 1.0, "fade_out": 0.5}})
+    assert mixed is not None
+    audio = mixed.audio
+    assert hasattr(audio, "with_volume_scaled"), "v1-API auf 2.x übertragen"
+    assert not hasattr(audio, "volumex")
+    assert not hasattr(audio, "set_audio")
+
+
+def test_mono_original_ton_unter_stereo_musik(tmp_path: Path) -> None:
+    """iPhone-Clips sind mono, MP3s stereo - sonst bricht das Addieren.
+
+    `CompositeAudioClip` addiert rohe Numpy-Arrays; mono liefert (n,), stereo
+    (n, 2). Ohne Angleichung: "operands could not be broadcast together".
+    """
+    import numpy as np
+    from moviepy import AudioClip
+
+    song = _music_file(tmp_path, seconds=1.5)  # stereo WAV
+    video = _silent_video(duration=3.0).with_audio(
+        AudioClip(lambda t: np.sin(2 * np.pi * 220 * t), duration=3.0, fps=22050)  # mono
+    )
+    mixed = mix_music(video, song, {"music": {"gain": 0.5, "fade_out": 0.0},
+                                   "video": {"original_gain": 0.25}})
+    assert mixed is not None and mixed.audio is not None
+    assert int(getattr(mixed.audio, "nchannels", 1)) >= 2
+    assert _rms(mixed.audio, 0.5, 1.0) > 0.0
+
+
+def test_match_audio_channels_shapes_frames() -> None:
+    """Der Weg, den die Kanal-Angleichung geht."""
+    import numpy as np
+    from moviepy import AudioClip
+
+    mono = AudioClip(lambda t: np.sin(2 * np.pi * 220 * t), duration=1.0, fps=22050)
+    stereo = _match_audio_channels(mono, 2)
+    assert int(stereo.nchannels) == 2
+    frame = stereo.get_frame(np.array([0.0, 0.001]))
+    assert frame.shape[-1] == 2, "zweite Kanalachse, nicht doppelte Länge"
+    assert np.allclose(frame[..., 0], frame[..., 1])
+
+    back = _match_audio_channels(stereo, 1)
+    assert int(back.nchannels) == 1
+    # Bereits passende Clips bleiben unverändert (kein Kopieren pro Frame).
+    assert _match_audio_channels(stereo, 2) is stereo
+
+
+def test_close_all_accepts_a_single_clip(tmp_path: Path) -> None:
+    """Regression: der Export blieb beim Aufräumen hängen.
+
+    Ein moviepy-Clip ist slicebar. `for clip in clip` iterierte deshalb über
+    Frames, nicht über Clips - `close()` lief ins Rendern und der Export
+    hing nach dem fertigen Video. Deshalb wird auf eine Liste normalisiert.
+    """
+    closed = []
+
+    class Sliceable:
+        n = 3
+
+        def __getitem__(self, item):
+            return "frame"
+
+        def close(self):
+            closed.append(self)
+
+    single = Sliceable()
+    _close_all(single)  # type: ignore[arg-type]
+    assert len(closed) == 1
+
+    _close_all([single, None])
+    assert len(closed) == 2, "None darf den Close nicht abbrechen"
+    _close_all(None)  # type: ignore[arg-type]
+
+
+def test_missing_music_file_leaves_the_reel_silent(tmp_path: Path) -> None:
+    """Keine Datei ist kein Fehler - der Export läuft stumm weiter."""
+    assert mix_music(_silent_video(), tmp_path / "fehlt.mp3", {}) is None
+
+
+def test_music_fails_gracefully_when_moviepy_rejects_it(tmp_path: Path) -> None:
+    """Beschädigte Musik darf den Lauf nie abreißen."""
+    broken = tmp_path / "broken.wav"
+    broken.write_bytes(b"not audio at all")
+    assert mix_music(_silent_video(), broken, {}) is None
+
+
+def test_only_deliberately_chosen_music_is_mixed(tmp_path: Path) -> None:
+    """Der Watcher hat niemanden nach Musik gefragt -> Reel bleibt stumm.
+
+    ``music_dir`` bzw. ``spotify.track_file`` liefert nur den Schnitttakt.
+    """
+    cfg = {"music_dir": str(tmp_path), "music": {"file": str(tmp_path / "a.mp3")}}
+    (tmp_path / "a.mp3").write_bytes(b"stub")
+
+    # Ohne CLI-Wunsch wird nichts gemischt.
+    assert _resolve_music_file(None, cfg) is None
+    # Eine Spotify-URI ist keine Audiodatei.
+    assert _resolve_music_file("spotify:track:abc", cfg) is None
+    # Explizite Datei gewinnt.
+    explicit = tmp_path / "b.mp3"
+    explicit.write_bytes(b"stub")
+    assert _resolve_music_file(explicit, cfg) == explicit
+
+
+def test_music_file_from_config_is_used_as_ton(tmp_path: Path) -> None:
+    """`music.file` in der Config zählt als bewusste Wahl - mit `-m auto`."""
+    song = _music_file(tmp_path)
+    cfg = {"music": {"file": str(song)}}
+    assert _resolve_music_file("auto", cfg) == song
+    assert _resolve_music_file(None, cfg) is None
+
+
+def test_auto_finds_the_configured_music_for_beats_too(tmp_path: Path) -> None:
+    """`-m auto` muss Beat-Quelle *und* Ton liefern - nicht nur den Ton.
+
+    Sonst sucht der Beat-Auflöser nach einer Datei namens "auto", verwarnt und
+    fällt auf 120 BPM zurück, während der Export die konfigurierte Musik
+    unterlegt - der Schnitt passte dann nicht mehr zum Track.
+    """
+    song = _music_file(tmp_path)
+    cfg = {"music": {"file": str(song)}}
+    assert _pick_music("auto", cfg) == song
+    assert _pick_music(song, cfg) == song
+    # Ohne music.file gibt es für "auto" nichts zu holen.
+    assert _pick_music("auto", {}) is None
+    assert _resolve_music_file("auto", {}) is None
+
+
+def test_music_defaults_dont_break_loading() -> None:
+    """Die neuen Keys sind in den Defaults dokumentiert."""
+    assert DEFAULTS["music"]["gain"] == 1.0
+    assert DEFAULTS["music"]["fade_out"] == 1.5
+    assert DEFAULTS["video"]["original_gain"] == 0.25
 
 
 def _base_cfg() -> dict[str, Any]:

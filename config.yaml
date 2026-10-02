@@ -8,7 +8,9 @@
 ingest_dir: /srv/nas/Nils/video-cut/ingest
 # Export: fertige Reels/Shorts + Cover-Thumbnails, unterteilt nach <Trip>/<Tag>/
 output_dir: /srv/nas/Nils/video-cut/output
-# Musik: optionale MP3 für Beat-Matching.
+# Musik: MP3s fuer Beat-Matching. Die neueste Datei liefert nur den Takt; als
+# Ton ins Reel kommt Musik nur, wenn sie bewusst gewaehlt wurde (-m <datei>,
+# Homelab-Auswahl oder -m auto auf music.file unten).
 music_dir: /srv/nas/Nils/video-cut/music
 
 # Als Rohmaterial akzeptierte Endungen (case-insensitiv geprüft).
@@ -31,11 +33,16 @@ video:
   crf: 19              # 18 = visuell verlustfrei, 23 = klein. 19 = sweet spot
   preset: medium       # ultrafast..veryslow
   pixel_format: yuv420p
-  # Audio ist ein Opt-in. Mit false (Default) bleibt das Reel stumm, die Musik
-  # kommt in Instagram dazu. Mit true wandert der Originalton der Rohclips ins
-  # Reel - die Musik wird dabei NIE untergemischt, sie dient nur der
-  # Schnittplanung. Auch nachtraeglich per CLI: --audio / --no-audio
+  # Audio ist ein Opt-in. Mit false (Default) bleibt das Reel ohne Originalton.
+  # Mit true wandert der Ton der Rohclips ins Reel - und liegt Musik darunter,
+  # laeuft der Originalton gedämpft darunter. Musik wird nur bei bewusster Wahl
+  # untergemischt (-m <datei>, Homelab-Auswahl oder -m auto); der
+  # Watcher-Automatismus (neueste Datei aus music_dir, spotify.track_file)
+  # steuert nur den Schnitttakt.
+  # Auch nachtraeglich per CLI: --audio / --no-audio
   audio: false
+  # Tonpegel des Clip-Originaltons, wenn Musik darunter gemischt wird.
+  original_gain: 0.25
   audio_codec: aac          # AAC - von Instagram/WhatsApp akzeptiert
   audio_bitrate: 192k
   audio_sample_rate: 44100   # 48000 bei filmischem Material
@@ -45,6 +52,31 @@ video:
   cover: true          # 1080x1920 Thumbnail erzeugen
   cover_at: 0.5        # Zeitpunkt des Cover-Frames in Sekunden
   threads: 0           # 0 = ffmpeg entscheidet selbst
+
+# =============================================================================
+# Musik im fertigen Reel
+# -----------------------------------------------------------------------------
+# Wichtig: Musik wird NUR untergemischt, wenn sie bewusst als *Ton* gewaehlt
+# wurde - per `-m <datei>` (auch aus dem Homelab) oder per `-m auto`, das auf
+# `file` bzw. TENOR_MUSIC_FILE zeigt. Ein Lauf *ohne* `-m` bleibt stumm: der
+# Watcher-Automatismus (neueste Datei aus music_dir, spotify.track_file) liefert
+# nur den Takt fuer den Schnittplan. Das ist Absicht - niemand hat in einem
+# unbeaufsichtigten Lauf nach Musik gefragt.
+#
+# Ist die Datei leer, fehlt oder unlesbar, bleibt der Export stumm - ein
+# kaputter Track darf nie das ganze Video kosten.
+# =============================================================================
+music:
+  # Feste Musikdatei fuer `-m auto` (bzw. TENOR_MUSIC_FILE). Leer = bei `-m
+  # auto` wird nichts gemischt.
+  #   file: /srv/nas/Nils/video-cut/music/the_waves.mp3
+  file: ""
+  gain: 1.0            # Pegel der Musik (1.0 = unveraendert)
+  fade_in: 0.0         # Einblenden am Reel-Anfang, Sekunden (0 = hart)
+  fade_out: 1.5        # Ausblenden am Reel-Ende, Sekunden
+  # Kuerzere Tracks werden in Schleifen bis ueber die Reellaenge gelegt und dann
+  # auf die exakte Laenge geschnitten - ein 90-Sekunden-Track auf einem
+  # 3-Sekunden-Reel darf nicht nach 1,5 s verstummen.
 
 # =============================================================================
 # Schnitt / Beat-Matching
