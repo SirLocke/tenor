@@ -190,8 +190,14 @@ def _collect_tags(probe: Mapping[str, Any] | None) -> dict[str, str]:
     tags: dict[str, str] = {}
     if not probe:
         return tags
-    containers: list[Mapping[str, Any]] = [probe.get("format") or {}]
-    containers.extend(st for st in (probe.get("streams") or []) if isinstance(st, Mapping))
+
+    fmt = probe.get("format")
+    containers: list[Mapping[str, Any]] = [fmt] if isinstance(fmt, Mapping) else [{}]
+
+    streams = probe.get("streams")
+    if isinstance(streams, Iterable) and not isinstance(streams, (str, bytes)):
+        containers.extend(st for st in streams if isinstance(st, Mapping))
+
     for container in containers:
         raw = container.get("tags")
         if isinstance(raw, Mapping):
@@ -447,13 +453,16 @@ def probe_clip(path: str | Path) -> ClipInfo:
         created = embedded_datetime(geo_raw)
     clip.created = created
 
-    fmt = probe.get("format") or {}
-    duration = _to_float(fmt.get("duration"))
+    fmt = probe.get("format")
+    fmt_dict = fmt if isinstance(fmt, Mapping) else {}
+    duration = _to_float(fmt_dict.get("duration"))
     if duration != duration:  # NaN
         duration = 0.0
     clip.duration = max(duration, 0.0)
 
-    for stream in probe.get("streams") or []:
+    streams = probe.get("streams")
+    streams_iter = streams if isinstance(streams, Iterable) and not isinstance(streams, (str, bytes)) else []
+    for stream in streams_iter:
         if not isinstance(stream, Mapping) or stream.get("codec_type") != "video":
             continue
         if clip.width == 0:
