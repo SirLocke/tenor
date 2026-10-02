@@ -144,7 +144,10 @@ def get_token(force: bool = False) -> str | None:
         data = response.json()
         token = str(data["access_token"])
         _cache.set(token, float(data.get("expires_in", 3600)))
-        log.info("Spotify-Token bezogen (gültig %.0f min)", float(data.get("expires_in", 3600)) / 60)
+        log.info(
+            "Spotify-Token bezogen (gültig %.0f min)",
+            float(data.get("expires_in", 3600)) / 60,
+        )
         return token
     except Exception as exc:  # Netzwerk, JSON, Timeouts - alles nicht kritisch
         log.warning("Spotify-Token nicht erhältlich: %s", exc)
@@ -154,6 +157,7 @@ def get_token(force: bool = False) -> str | None:
 def _auth_get(url: str, *, quota_locked: bool = False) -> Any | None:
     """GET mit Bearer-Token, einmaliger Retry bei abgelaufenem Token.
 
+    Unterstützt exponentielles Backoff bei HTTP 429 (Rate Limit).
     ``quota_locked`` markiert Endpoints, die seit 27.11.2024 für neue Apps
     gesperrt sind. Ein 403 wird dort als :class:`SpotifyAccessError` gemeldet
     (mit Ursache), statt es als generischen Fehler zu verschlucken.
@@ -161,17 +165,51 @@ def _auth_get(url: str, *, quota_locked: bool = False) -> Any | None:
     requests = _requests()
     if requests is None:
         return None
+
+    max_429_retries = 3
+    retries_429 = 0
+
     for attempt in (0, 1):
         token = get_token(force=attempt == 1)
         if not token:
             return None
-        try:
-            response = requests.get(
-                url, headers={"Authorization": f"Bearer {token}"}, timeout=20
-            )
-        except Exception as exc:
-            log.warning("Spotify-Anfrage fehlgeschlagen: %s", exc)
-            return None
+
+        while True:
+            try:
+                response = requests.get(
+                    url, headers={"Authorization": f"Bearer {token}"}, timeout=20
+                )
+            except Exception as exc:
+                log.warning("Spotify-Anfrage fehlgeschlagen: %s", exc)
+                return None
+
+            if response.status_code == 429:
+                if retries_429 >= max_429_retries:
+                    retry_after = response.headers.get("Retry-After", "?")
+                    log.warning(
+                        "Spotify-Drosselung erreicht (Retry-After=%s), maximale Retries überschritten",
+                        retry_after,
+                    )
+                    return None
+
+                retry_after_header = response.headers.get("Retry-After")
+                if retry_after_header and retry_after_header.isdigit():
+                    wait_time = int(retry_after_header)
+                else:
+                    wait_time = 2**retries_429
+
+                log.info(
+                    "Spotify HTTP 429: Warte %ds (Versuch %d/%d)",
+                    wait_time,
+                    retries_429 + 1,
+                    max_429_retries,
+                )
+                time.sleep(wait_time)
+                retries_429 += 1
+                continue
+
+            break  # Exit the 429 loop for other responses
+
         if response.status_code == 401 and attempt == 0:
             _cache.clear()
             continue
@@ -179,12 +217,10 @@ def _auth_get(url: str, *, quota_locked: bool = False) -> Any | None:
             return None
         if response.status_code == 403 and quota_locked:
             raise SpotifyAccessError(QUOTA_HINT)
-        if response.status_code == 429:
-            retry_after = response.headers.get("Retry-After", "?")
-            log.warning("Spotify-Drosselung erreicht (Retry-After=%s)", retry_after)
-            return None
         if not response.ok:
-            log.warning("Spotify HTTP %s bei %s", response.status_code, url.rsplit("/", 1)[-1])
+            log.warning(
+                "Spotify HTTP %s bei %s", response.status_code, url.rsplit("/", 1)[-1]
+            )
             return None
         try:
             return response.json()
@@ -242,7 +278,5 @@ def fetch_spotify_beats(track_uri: str) -> list[float] | None:
             tempo = float(track.get("tempo") or 0.0)
         except (TypeError, ValueError):
             tempo = 0.0
-    log.info(
-        "Spotify: %d Beats, Tempo ~%.1f BPM für %s", len(beats), tempo, track_uri
-    )
+    log.info("Spotify: %d Beats, Tempo ~%.1f BPM für %s", len(beats), tempo, track_uri)
     return beats or None
