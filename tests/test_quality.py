@@ -30,11 +30,12 @@ from src.quality import (  # noqa: E402
     WindowPlan,
     analyse_clips,
     check_window,
+    clamp_start,
+    find_highlights,
     plan_windows,
     signature_distance,
     spread_windows,
     window_score,
-    find_highlights,
 )
 
 
@@ -583,6 +584,46 @@ class TestAnalyseClips:
             [Path("/gibt/es/nicht.mov")], _cfg(), cache_dir=Path("/tmp/tenor-test-quality")
         )
         assert Path("/gibt/es/nicht.mov") in analyses
+
+
+# --------------------------------------------------------------------------- #
+# Clamp Start Boundary Logic
+# --------------------------------------------------------------------------- #
+class TestClampStart:
+    @pytest.mark.parametrize(
+        ("start", "length", "source_duration", "expected"),
+        [
+            # In-bounds start position
+            (2.0, 1.5, 10.0, 2.0),
+            # Exactly at start boundary
+            (0.0, 1.5, 10.0, 0.0),
+            # Negative start position (underflow clamped to 0.0)
+            (-1.5, 2.0, 10.0, 0.0),
+            # Exactly at upper boundary (start + length == source_duration)
+            (8.5, 1.5, 10.0, 8.5),
+            # Start exceeds upper bound (start + length > source_duration)
+            (9.0, 1.5, 10.0, 8.5),
+            # Start far beyond source duration
+            (20.0, 1.5, 10.0, 8.5),
+            # Length equals source_duration
+            (0.0, 10.0, 10.0, 0.0),
+            (3.0, 10.0, 10.0, 0.0),
+            # Length exceeds source_duration (clamped to 0.0)
+            (0.0, 12.0, 10.0, 0.0),
+            (2.0, 15.0, 10.0, 0.0),
+            # Non-positive source duration edge cases
+            (2.5, 1.5, 0.0, 2.5),
+            (-1.0, 1.5, 0.0, 0.0),
+            (3.0, 1.0, -5.0, 3.0),
+            (-2.0, 1.0, -5.0, 0.0),
+        ],
+    )
+    def test_clamp_start_boundary_logic(
+        self, start: float, length: float, source_duration: float, expected: float
+    ) -> None:
+        result = clamp_start(start, length, source_duration)
+        assert result == pytest.approx(expected)
+        assert isinstance(result, float)
 
 
 # --------------------------------------------------------------------------- #
