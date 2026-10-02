@@ -6,7 +6,6 @@ Alle Funktionen sind fehlertolerant: kaputte oder unlesbare Dateien liefern
 
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 import re
@@ -618,6 +617,8 @@ def primary_place(place: str | None) -> str | None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI: ``python -m src.metadata -i /pfad/zum/ordner`` - Metadaten auflisten."""
+    import argparse
+
     parser = argparse.ArgumentParser(
         prog="python -m src.metadata",
         description="Metadaten der Rohclips anzeigen (Debug-Hilfe).",
