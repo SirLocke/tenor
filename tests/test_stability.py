@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from unittest.mock import patch
 from types import SimpleNamespace
 from typing import Any
 
@@ -34,6 +35,7 @@ from src.watcher import (  # noqa: E402
     IngestHandler,
     IngestProcessor,
     WatcherState,
+    size_stable,
     wait_until_stable,
 )
 
@@ -205,6 +207,40 @@ def test_wait_until_stable_accepts_settled_file(tmp_path: Path) -> None:
 
 def test_wait_until_stable_rejects_missing_file(tmp_path: Path) -> None:
     assert not wait_until_stable(tmp_path / "weg.mov", 0.1, poll=0.05)
+
+
+def test_wait_until_stable_survives_transient_oserror(tmp_path: Path) -> None:
+    clip = tmp_path / "transient.mov"
+    clip.write_bytes(b"x" * 4096)
+
+    original_stat = clip.stat
+    call_count = [0]
+
+    def mocked_stat(*args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise OSError("Transient Network Error")
+        return original_stat(*args, **kwargs)
+
+    with patch.object(Path, "stat", side_effect=mocked_stat):
+        assert wait_until_stable(clip, 0.1, poll=0.05)
+
+
+def test_size_stable_survives_transient_oserror(tmp_path: Path) -> None:
+    clip = tmp_path / "transient.mov"
+    clip.write_bytes(b"x" * 4096)
+
+    original_stat = clip.stat
+    call_count = [0]
+
+    def mocked_stat(*args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise OSError("Transient Network Error")
+        return original_stat(*args, **kwargs)
+
+    with patch.object(Path, "stat", side_effect=mocked_stat):
+        assert size_stable(clip, 2, poll=0.05)
 
 
 def test_wait_until_stable_gives_up_eventually(tmp_path: Path) -> None:

@@ -42,6 +42,22 @@ log = logging.getLogger("tenor.watcher")
 STATE_FILENAME = ".tenor-state.json"
 
 
+def get_stat(path: Path, retries: int = 3, delay: float = 0.5) -> os.stat_result:
+    """Versucht path.stat() mit Retries für flüchtige Dateisystemfehler."""
+    for attempt in range(retries):
+        try:
+            return path.stat()
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            if attempt < retries - 1:
+                log.debug("stat() fehlgeschlagen, %d. Retry für %s: %s", attempt + 1, path.name, exc)
+                time.sleep(delay)
+            else:
+                raise
+    raise AssertionError("Unreachable")
+
+
 def is_media(path: Path, extensions: Sequence[str]) -> bool:
     """Endungs- und Temp-Dateicheck (SMB/CIFS schreibt oft ``.part``-Zwischenstände)."""
     if not path.is_file():
@@ -63,7 +79,7 @@ def size_stable(path: Path, checks: int = 2, poll: float = 1.0) -> bool:
     last: int | None = None
     for _ in range(max(checks, 1)):
         try:
-            current = path.stat().st_size
+            current = get_stat(path).st_size
         except OSError:
             return False
         if last is not None and current != last:
@@ -90,7 +106,7 @@ def wait_until_stable(
 
     while True:
         try:
-            size = path.stat().st_size
+            size = get_stat(path).st_size
         except FileNotFoundError:
             return False
         except OSError as exc:
@@ -202,7 +218,7 @@ class WatcherState:
 
     def is_processed(self, path: Path) -> bool:
         try:
-            mtime = path.stat().st_mtime
+            mtime = get_stat(path).st_mtime
         except OSError:
             return False
         with self._lock:
@@ -211,7 +227,7 @@ class WatcherState:
 
     def mark(self, path: Path) -> None:
         try:
-            stamp = path.stat().st_mtime
+            stamp = get_stat(path).st_mtime
         except OSError:
             return
         with self._lock:
