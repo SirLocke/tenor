@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sys
 import threading
 import time
@@ -253,6 +254,57 @@ def test_size_stable_survives_transient_oserror(tmp_path: Path) -> None:
 
     with patch.object(Path, "stat", side_effect=mocked_stat):
         assert size_stable(clip, 2, poll=0.05)
+
+
+def test_size_stable_returns_false_on_persistent_oserror(tmp_path: Path) -> None:
+    clip = tmp_path / "persistent.mov"
+    clip.write_bytes(b"x" * 4096)
+
+    with patch("src.watcher.get_stat", side_effect=OSError("Persistent OS error")):
+        assert not size_stable(clip, checks=2, poll=0.0)
+
+
+def test_size_stable_returns_false_on_oserror_during_subsequent_check(tmp_path: Path) -> None:
+    clip = tmp_path / "subsequent_fail.mov"
+    clip.write_bytes(b"x" * 4096)
+
+    original_get_stat = clip.stat
+    call_count = [0]
+
+    def mocked_get_stat(path: Path) -> os.stat_result:
+        call_count[0] += 1
+        if call_count[0] > 1:
+            raise OSError("Fail on check 2")
+        return original_get_stat()
+
+    with patch("src.watcher.get_stat", side_effect=mocked_get_stat):
+        assert not size_stable(clip, checks=2, poll=0.0)
+
+
+def test_size_stable_returns_true_when_stable(tmp_path: Path) -> None:
+    clip = tmp_path / "stable.mov"
+    clip.write_bytes(b"x" * 1024)
+    assert size_stable(clip, checks=3, poll=0.0)
+
+
+def test_size_stable_returns_false_when_unstable(tmp_path: Path) -> None:
+    clip = tmp_path / "growing.mov"
+    clip.write_bytes(b"x" * 1024)
+
+    sizes = [1024, 2048]
+    call_count = [0]
+
+    class FakeStat:
+        def __init__(self, size: int):
+            self.st_size = size
+
+    def mocked_get_stat(path: Path):
+        idx = min(call_count[0], len(sizes) - 1)
+        call_count[0] += 1
+        return FakeStat(sizes[idx])
+
+    with patch("src.watcher.get_stat", side_effect=mocked_get_stat):
+        assert not size_stable(clip, checks=2, poll=0.0)
 
 
 def test_wait_until_stable_gives_up_eventually(tmp_path: Path) -> None:
