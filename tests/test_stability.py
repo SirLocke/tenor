@@ -801,6 +801,30 @@ def test_resolve_beats_cli_file_wins_over_spotify(tmp_path: Path) -> None:
     assert called == []
 
 
+def test_detect_beat_durations_median_calculation(tmp_path: Path) -> None:
+    """Prüft, dass detect_beat_durations mit Mock-Librosa Median-Intervalle korrekt berechnet."""
+    import sys
+    from unittest.mock import MagicMock
+    import numpy as np
+    import src.pipeline as pipeline_module
+
+    fake_librosa = MagicMock()
+    # Erzeuge synthetisches Audiosignal und Beats: 100 Beats mit 0.5s Abstand
+    fake_librosa.load.return_value = (np.ones(22050), 22050)
+    fake_librosa.beat.beat_track.return_value = (120.0, np.arange(0, 100))
+    # 0, 0.5, 1.0, 1.5, ...
+    fake_librosa.frames_to_time.return_value = np.arange(0, 100) * 0.5
+
+    dummy_music = tmp_path / "test.mp3"
+    dummy_music.touch()
+
+    with patch.dict(sys.modules, {"librosa": fake_librosa}):
+        durations = pipeline_module.detect_beat_durations(dummy_music, {"target": 1.7, "target_min": 1.4, "target_max": 2.0})
+
+    assert len(durations) > 0
+    assert all(1.4 <= d <= 2.0 for d in durations)
+
+
 from unittest.mock import Mock, patch
 
 
