@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sys
 import threading
 import time
 from pathlib import Path
+from unittest.mock import patch
 from types import SimpleNamespace
 from typing import Any
 
@@ -38,6 +40,7 @@ from src.watcher import (  # noqa: E402
     IngestHandler,
     IngestProcessor,
     WatcherState,
+    size_stable,
     wait_until_stable,
 )
 
@@ -50,7 +53,11 @@ def _processor(tmp_path: Path, **overrides: Any) -> IngestProcessor:
         **DEFAULTS,
         "ingest_dir": str(tmp_path / "ingest"),
         "output_dir": str(tmp_path / "out"),
-        "watcher": {**DEFAULTS["watcher"], "debounce_seconds": 0.1, "batch_window": 0.1},
+        "watcher": {
+            **DEFAULTS["watcher"],
+            "debounce_seconds": 0.1,
+            "batch_window": 0.1,
+        },
     }
     cfg["watcher"].update(overrides)
     (tmp_path / "ingest").mkdir(parents=True, exist_ok=True)
@@ -134,7 +141,15 @@ def test_state_survives_corrupt_json_via_backup(tmp_path: Path) -> None:
 def test_state_keeps_good_entries_when_one_is_bad(tmp_path: Path) -> None:
     state_path = tmp_path / ".tenor-state.json"
     state_path.write_text(
-        json.dumps({"processed": {"/good.mov": 1.0, "/bad.mov": "kein-float", "/nan.mov": float("nan")}}),
+        json.dumps(
+            {
+                "processed": {
+                    "/good.mov": 1.0,
+                    "/bad.mov": "kein-float",
+                    "/nan.mov": float("nan"),
+                }
+            }
+        ),
         encoding="utf-8",
     )
     loaded = WatcherState.load(state_path)
@@ -211,6 +226,91 @@ def test_wait_until_stable_rejects_missing_file(tmp_path: Path) -> None:
     assert not wait_until_stable(tmp_path / "weg.mov", 0.1, poll=0.05)
 
 
+def test_wait_until_stable_survives_transient_oserror(tmp_path: Path) -> None:
+    clip = tmp_path / "transient.mov"
+    clip.write_bytes(b"x" * 4096)
+
+    original_stat = clip.stat
+    call_count = [0]
+
+    def mocked_stat(*args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise OSError("Transient Network Error")
+        return original_stat(*args, **kwargs)
+
+    with patch.object(Path, "stat", side_effect=mocked_stat):
+        assert wait_until_stable(clip, 0.1, poll=0.05)
+
+
+def test_size_stable_survives_transient_oserror(tmp_path: Path) -> None:
+    clip = tmp_path / "transient.mov"
+    clip.write_bytes(b"x" * 4096)
+
+    original_stat = clip.stat
+    call_count = [0]
+
+    def mocked_stat(*args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise OSError("Transient Network Error")
+        return original_stat(*args, **kwargs)
+
+    with patch.object(Path, "stat", side_effect=mocked_stat):
+        assert size_stable(clip, 2, poll=0.05)
+
+
+def test_size_stable_returns_false_on_persistent_oserror(tmp_path: Path) -> None:
+    clip = tmp_path / "persistent.mov"
+    clip.write_bytes(b"x" * 4096)
+
+    with patch("src.watcher.get_stat", side_effect=OSError("Persistent OS error")):
+        assert not size_stable(clip, checks=2, poll=0.0)
+
+
+def test_size_stable_returns_false_on_oserror_during_subsequent_check(tmp_path: Path) -> None:
+    clip = tmp_path / "subsequent_fail.mov"
+    clip.write_bytes(b"x" * 4096)
+
+    original_get_stat = clip.stat
+    call_count = [0]
+
+    def mocked_get_stat(path: Path) -> os.stat_result:
+        call_count[0] += 1
+        if call_count[0] > 1:
+            raise OSError("Fail on check 2")
+        return original_get_stat()
+
+    with patch("src.watcher.get_stat", side_effect=mocked_get_stat):
+        assert not size_stable(clip, checks=2, poll=0.0)
+
+
+def test_size_stable_returns_true_when_stable(tmp_path: Path) -> None:
+    clip = tmp_path / "stable.mov"
+    clip.write_bytes(b"x" * 1024)
+    assert size_stable(clip, checks=3, poll=0.0)
+
+
+def test_size_stable_returns_false_when_unstable(tmp_path: Path) -> None:
+    clip = tmp_path / "growing.mov"
+    clip.write_bytes(b"x" * 1024)
+
+    sizes = [1024, 2048]
+    call_count = [0]
+
+    class FakeStat:
+        def __init__(self, size: int):
+            self.st_size = size
+
+    def mocked_get_stat(path: Path):
+        idx = min(call_count[0], len(sizes) - 1)
+        call_count[0] += 1
+        return FakeStat(sizes[idx])
+
+    with patch("src.watcher.get_stat", side_effect=mocked_get_stat):
+        assert not size_stable(clip, checks=2, poll=0.0)
+
+
 def test_wait_until_stable_gives_up_eventually(tmp_path: Path) -> None:
     """Eine endlos wachsende Datei darf den Thread nicht ewig blockieren."""
     clip = tmp_path / "grow.mov"
@@ -252,7 +352,10 @@ def test_durations_from_bpm_respects_target_range(bpm: float) -> None:
 
 @pytest.mark.parametrize("bpm", [0, -1, float("nan")])
 def test_durations_from_bpm_rejects_bad_input(bpm: float) -> None:
-    assert durations_from_bpm(bpm, {"target_min": 1.4, "target_max": 2.0, "target": 1.7}) == []
+    assert (
+        durations_from_bpm(bpm, {"target_min": 1.4, "target_max": 2.0, "target": 1.7})
+        == []
+    )
 
 
 def test_fallback_bpm_prefers_explicit_cut_setting() -> None:
@@ -270,7 +373,10 @@ def test_fallback_bpm_matches_music_hint() -> None:
 
 def test_fallback_bpm_longest_key_wins() -> None:
     """'pop' darf ein spezifischeres 'pop remix' nicht verdecken."""
-    cfg = {"cut": {}, "spotify": {"fallback_bpm": {"default": 90, "pop": 120, "pop remix": 140}}}
+    cfg = {
+        "cut": {},
+        "spotify": {"fallback_bpm": {"default": 90, "pop": 120, "pop remix": 140}},
+    }
     assert _get_fallback_bpm(cfg, "Nightdrive (Pop Remix).mp3") == 140.0
 
 
@@ -291,7 +397,10 @@ def test_fallback_bpm_default_without_config() -> None:
 
 
 def test_fallback_bpm_skips_broken_entries() -> None:
-    cfg = {"cut": {}, "spotify": {"fallback_bpm": {"broken": "kein-float", "default": 128}}}
+    cfg = {
+        "cut": {},
+        "spotify": {"fallback_bpm": {"broken": "kein-float", "default": 128}},
+    }
     assert _get_fallback_bpm(cfg, "broken.mp3") == 128.0
 
 
@@ -364,7 +473,9 @@ def test_collect_clips_honours_ignore_dirs(tmp_path: Path) -> None:
     (tmp_path / "imgest" / "a.mov").touch()
     (tmp_path / "Madeira" / "b.mov").touch()
 
-    clips = collect_clips([tmp_path], extensions=[".mov"], ignore_dirs=["imgest"], recursive=True)
+    clips = collect_clips(
+        [tmp_path], extensions=[".mov"], ignore_dirs=["imgest"], recursive=True
+    )
     assert [c.path.name for c in clips] == ["b.mov"]
 
 
@@ -421,7 +532,9 @@ def test_build_segment_clip_never_exceeds_source_duration() -> None:
     pipeline_module.center_crop_resize = lambda piece, _w, _h: piece  # type: ignore[assignment]
     try:
         with pytest.raises(ValueError, match="außerhalb"):
-            build_segment_clip(segment, {}, GradeConfig(), None, fps=30, width=1080, height=1920)
+            build_segment_clip(
+                segment, {}, GradeConfig(), None, fps=30, width=1080, height=1920
+            )
     finally:
         pipeline_module._open_source = original  # type: ignore[assignment]
         pipeline_module.center_crop_resize = original_crop  # type: ignore[assignment]
@@ -459,7 +572,9 @@ def test_cli_audio_flag_reaches_run(tmp_path: Path) -> None:
 
     def _fake_run(*_args: Any, **kwargs: Any) -> SimpleNamespace:
         captured.update(kwargs)
-        return SimpleNamespace(output=None, outputs=[], covers=[], segments=[], errors=[])
+        return SimpleNamespace(
+            output=None, outputs=[], covers=[], segments=[], errors=[]
+        )
 
     original = pipeline_module.run
     pipeline_module.run = _fake_run  # type: ignore[assignment]
@@ -509,7 +624,9 @@ def test_watcher_audio_flag_reaches_pipeline(tmp_path: Path) -> None:
 
     def _fake_run(*_args: Any, **kwargs: Any) -> SimpleNamespace:
         captured.update(kwargs)
-        return SimpleNamespace(ok=True, output=None, outputs=[], covers=[], segments=[], errors=[])
+        return SimpleNamespace(
+            ok=True, output=None, outputs=[], covers=[], segments=[], errors=[]
+        )
 
     cfg: dict[str, Any] = {
         **DEFAULTS,
@@ -815,7 +932,10 @@ def test_spotify_403_falls_back_to_music_dir(tmp_path: Path) -> None:
 
     cfg = _base_cfg()
     cfg["music_dir"] = str(music_dir)
-    cfg["spotify"] = {"enabled": True, "track_uri": "spotify:track:0Hcr3kdSB9NVQmFckRsgSD"}
+    cfg["spotify"] = {
+        "enabled": True,
+        "track_uri": "spotify:track:0Hcr3kdSB9NVQmFckRsgSD",
+    }
 
     assert _pick_music(None, cfg) == song
 
@@ -891,11 +1011,20 @@ def test_resolve_beats_reports_blocked_spotify(tmp_path: Path) -> None:
 
     cfg = _base_cfg()
     cfg["music_dir"] = str(music_dir)
-    cfg["spotify"] = {"enabled": True, "track_uri": "spotify:track:0Hcr3kdSB9NVQmFckRsgSD"}
+    cfg["spotify"] = {
+        "enabled": True,
+        "track_uri": "spotify:track:0Hcr3kdSB9NVQmFckRsgSD",
+    }
 
-    originals = (pipeline_module._fetch_spotify_beats, pipeline_module.detect_beat_durations)
+    originals = (
+        pipeline_module._fetch_spotify_beats,
+        pipeline_module.detect_beat_durations,
+    )
     pipeline_module._fetch_spotify_beats = (  # type: ignore[assignment]
-        lambda _uri, _cfg: (None, "Spotify blockiert die Audio-Analysis für diese App (HTTP 403)")
+        lambda _uri, _cfg: (
+            None,
+            "Spotify blockiert die Audio-Analysis für diese App (HTTP 403)",
+        )
     )
     pipeline_module.detect_beat_durations = (  # type: ignore[assignment]
         lambda _path, _cut: [1.5]
@@ -903,7 +1032,9 @@ def test_resolve_beats_reports_blocked_spotify(tmp_path: Path) -> None:
     try:
         durations, source, note = pipeline_module._resolve_beats(None, cfg, cfg["cut"])
     finally:
-        pipeline_module._fetch_spotify_beats, pipeline_module.detect_beat_durations = originals  # type: ignore[assignment]
+        pipeline_module._fetch_spotify_beats, pipeline_module.detect_beat_durations = (
+            originals  # type: ignore[assignment]
+        )
 
     assert durations == [1.5]
     assert source == "beats:song.mp3"
@@ -960,7 +1091,10 @@ def test_resolve_beats_cli_file_wins_over_spotify(tmp_path: Path) -> None:
     song.write_bytes(b"a")
 
     cfg = _base_cfg()
-    cfg["spotify"] = {"enabled": True, "track_uri": "spotify:track:0Hcr3kdSB9NVQmFckRsgSD"}
+    cfg["spotify"] = {
+        "enabled": True,
+        "track_uri": "spotify:track:0Hcr3kdSB9NVQmFckRsgSD",
+    }
 
     called: list[str] = []
 
@@ -973,10 +1107,125 @@ def test_resolve_beats_cli_file_wins_over_spotify(tmp_path: Path) -> None:
     pipeline_module._fetch_spotify_beats = _fake_spotify  # type: ignore[assignment]
     pipeline_module.detect_beat_durations = lambda _path, _cut: [1.5]  # type: ignore[assignment]
     try:
-        _durations, source, _note = pipeline_module._resolve_beats(str(song), cfg, cfg["cut"])
+        _durations, source, _note = pipeline_module._resolve_beats(
+            str(song), cfg, cfg["cut"]
+        )
     finally:
         pipeline_module._fetch_spotify_beats = original_fetch  # type: ignore[assignment]
         pipeline_module.detect_beat_durations = original_detect  # type: ignore[assignment]
 
     assert source == "beats:cli.mp3"
     assert called == []
+
+
+def test_detect_beat_durations_median_calculation(tmp_path: Path) -> None:
+    """Prüft, dass detect_beat_durations mit Mock-Librosa Median-Intervalle korrekt berechnet."""
+    import sys
+    from unittest.mock import MagicMock
+    import numpy as np
+    import src.pipeline as pipeline_module
+
+    fake_librosa = MagicMock()
+    # Erzeuge synthetisches Audiosignal und Beats: 100 Beats mit 0.5s Abstand
+    fake_librosa.load.return_value = (np.ones(22050), 22050)
+    fake_librosa.beat.beat_track.return_value = (120.0, np.arange(0, 100))
+    # 0, 0.5, 1.0, 1.5, ...
+    fake_librosa.frames_to_time.return_value = np.arange(0, 100) * 0.5
+
+    dummy_music = tmp_path / "test.mp3"
+    dummy_music.touch()
+
+    with patch.dict(sys.modules, {"librosa": fake_librosa}):
+        durations = pipeline_module.detect_beat_durations(dummy_music, {"target": 1.7, "target_min": 1.4, "target_max": 2.0})
+
+    assert len(durations) > 0
+    assert all(1.4 <= d <= 2.0 for d in durations)
+
+
+from unittest.mock import Mock, patch
+
+
+@patch("src.spotify_beats.get_token")
+@patch("src.spotify_beats._requests")
+@patch("src.spotify_beats.time.sleep")
+def test_spotify_429_exponential_backoff(
+    mock_sleep: Mock, mock_requests: Mock, mock_get_token: Mock
+) -> None:
+    from src.spotify_beats import _auth_get
+
+    mock_get_token.return_value = "fake-token"
+    mock_req_module = Mock()
+    mock_requests.return_value = mock_req_module
+
+    resp_429 = Mock()
+    resp_429.status_code = 429
+    resp_429.headers = {}
+    resp_429.ok = False
+
+    resp_200 = Mock()
+    resp_200.status_code = 200
+    resp_200.ok = True
+    resp_200.json.return_value = {"success": True}
+
+    mock_req_module.get.side_effect = [resp_429, resp_429, resp_429, resp_200]
+
+    result = _auth_get("http://fake.url")
+    assert result == {"success": True}
+    assert mock_sleep.call_count == 3
+    assert mock_sleep.call_args_list[0][0][0] == 1
+    assert mock_sleep.call_args_list[1][0][0] == 2
+    assert mock_sleep.call_args_list[2][0][0] == 4
+
+
+@patch("src.spotify_beats.get_token")
+@patch("src.spotify_beats._requests")
+@patch("src.spotify_beats.time.sleep")
+def test_spotify_429_retry_after_header(
+    mock_sleep: Mock, mock_requests: Mock, mock_get_token: Mock
+) -> None:
+    from src.spotify_beats import _auth_get
+
+    mock_get_token.return_value = "fake-token"
+    mock_req_module = Mock()
+    mock_requests.return_value = mock_req_module
+
+    resp_429 = Mock()
+    resp_429.status_code = 429
+    resp_429.headers = {"Retry-After": "5"}
+    resp_429.ok = False
+
+    resp_200 = Mock()
+    resp_200.status_code = 200
+    resp_200.ok = True
+    resp_200.json.return_value = {"success": True}
+
+    mock_req_module.get.side_effect = [resp_429, resp_200]
+
+    result = _auth_get("http://fake.url")
+    assert result == {"success": True}
+    assert mock_sleep.call_count == 1
+    assert mock_sleep.call_args_list[0][0][0] == 5
+
+
+@patch("src.spotify_beats.get_token")
+@patch("src.spotify_beats._requests")
+@patch("src.spotify_beats.time.sleep")
+def test_spotify_429_max_retries_exceeded(
+    mock_sleep: Mock, mock_requests: Mock, mock_get_token: Mock
+) -> None:
+    from src.spotify_beats import _auth_get
+
+    mock_get_token.return_value = "fake-token"
+    mock_req_module = Mock()
+    mock_requests.return_value = mock_req_module
+
+    resp_429 = Mock()
+    resp_429.status_code = 429
+    resp_429.headers = {}
+    resp_429.ok = False
+
+    mock_req_module.get.return_value = resp_429
+
+    result = _auth_get("http://fake.url")
+    assert result is None
+    assert mock_sleep.call_count == 3

@@ -11,7 +11,7 @@ Fachmodule liegen in:
 
 from __future__ import annotations
 
-import copy
+from copy import deepcopy
 import logging
 import os
 import re
@@ -210,7 +210,7 @@ class ConfigError(RuntimeError):
 
 def _deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
     """Merge ``override`` rekursiv in eine Kopie von ``base``."""
-    merged: dict[str, Any] = copy.deepcopy(dict(base))
+    merged: dict[str, Any] = deepcopy(dict(base))
     for key, value in override.items():
         current = merged.get(key)
         if isinstance(current, Mapping) and isinstance(value, Mapping):

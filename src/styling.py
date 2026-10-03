@@ -13,12 +13,11 @@ rechtsbündig verankert - ohne Box, mit weichem Drop-Shadow.
 
 from __future__ import annotations
 
-import logging
-import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
+from logging import getLogger
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +26,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from . import expand_path, get
 
-log = logging.getLogger("tenor.styling")
+log = getLogger("tenor.styling")
 
 try:  # OpenCV ist nur für die LUT-Anwendung nötig, numpy-Fallback existiert
     import cv2
