@@ -50,8 +50,126 @@ from .styling import (
     make_grader,
     target_size,
 )
+from moviepy import VideoClip, AudioClip
 
 log = logging.getLogger("tenor.pipeline")
+
+
+class StreamingAudio(AudioClip):
+    """Löst den Originalton der Teil-Clips verzögert auf."""
+
+    def __init__(self, make_clip_fns: Sequence[Any], durations: Sequence[float]) -> None:
+        self.make_clip_fns = make_clip_fns
+        self.timings = [0.0]
+        for d in durations:
+            self.timings.append(self.timings[-1] + d)
+
+        dur = self.timings[-1]
+        self.current_idx = -1
+        self.current_clip = None
+
+        def frame_function(t: Any) -> np.ndarray:
+            if isinstance(t, np.ndarray):
+                res = np.zeros((len(t), 2))
+                for i, time_ in enumerate(t):
+                    res[i] = self.get_single_frame(time_)
+                return res
+            return self.get_single_frame(t)
+
+        self._dur = dur
+        super().__init__(frame_function=frame_function, duration=dur, fps=44100)
+
+    def get_single_frame(self, t: float) -> np.ndarray:
+        if t < 0 or t >= self._dur:
+            return np.zeros((2,))
+
+        idx = np.searchsorted(self.timings, t, side='right') - 1
+        idx = int(min(max(idx, 0), len(self.make_clip_fns) - 1))
+
+        if idx != self.current_idx:
+            if self.current_clip is not None:
+                try:
+                    self.current_clip.close()
+                except Exception:
+                    pass
+            self.current_clip = self.make_clip_fns[idx]()
+            self.current_idx = idx
+
+        local_t = t - self.timings[idx]
+        if self.current_clip and getattr(self.current_clip, "audio", None):
+            return self.current_clip.audio.get_frame(local_t)
+        return np.zeros((2,))
+
+    def close(self) -> None:
+        if self.current_clip is not None:
+            try:
+                self.current_clip.close()
+            except Exception:
+                pass
+            self.current_clip = None
+
+
+class StreamingReel(VideoClip):
+    """Zieht Bild für Bild aus den Rohclips, damit ffmpeg-Reader nicht den RAM fluten.
+
+    ``concatenate_videoclips`` öffnet alle Teil-Clips gleichzeitig, was bei
+    30 Clips bedeutet, dass 30 FFMPEG-Prozesse mitsamt Puffer parallel
+    im Speicher liegen. Diese Klasse hält immer nur genau EINEN FFMPEG-Prozess
+    (den aktuellen Clip) offen.
+    """
+
+    def __init__(self, make_clip_fns: Sequence[Any], durations: Sequence[float],
+        size: tuple[int, int],
+        with_audio: bool = False) -> None:
+        self.make_clip_fns = make_clip_fns
+        self.durations = durations
+
+        self.timings = [0.0]
+        for d in durations:
+            self.timings.append(self.timings[-1] + d)
+
+        dur = self.timings[-1]
+
+        self.current_idx = -1
+        self.current_clip = None
+
+        def frame_function(t: float) -> np.ndarray:
+            if t < 0 or t >= dur:
+                return np.zeros((size[1], size[0], 3), dtype=np.uint8)
+
+            idx = np.searchsorted(self.timings, t, side='right') - 1
+            idx = int(min(max(idx, 0), len(self.make_clip_fns) - 1))
+
+            if idx != self.current_idx:
+                if self.current_clip is not None:
+                    try:
+                        self.current_clip.close()
+                    except Exception:
+                        pass
+                self.current_clip = self.make_clip_fns[idx]()
+                self.current_idx = idx
+
+            local_t = t - self.timings[idx]
+            return self.current_clip.get_frame(local_t)
+
+        super().__init__(frame_function=frame_function, duration=dur)
+        self.size = size
+
+        if with_audio:
+            self.audio = StreamingAudio(self.make_clip_fns, durations)
+
+    def close(self) -> None:
+        if self.current_clip is not None:
+            try:
+                self.current_clip.close()
+            except Exception:
+                pass
+            self.current_clip = None
+        if getattr(self, "audio", None) is not None:
+            try:
+                self.audio.close()
+            except Exception:
+                pass
 
 
 @dataclass
@@ -601,34 +719,44 @@ def render_segments(
     Quellen eine Tonspur, bleibt der betreffende Cut stumm - der Reel bleibt
     dadurch in jedem Fall hörbar, wo Material mit Ton vorliegt.
     """
-    from moviepy import concatenate_videoclips
-
     video_cfg = get(cfg, "video", {}) or {}
     fps = int(video_cfg.get("fps", 30))
     width, height = target_size(cfg)
     failures = on_error if on_error is not None else []
-    rendered: list[Any] = []
-    sources: list[Any] = []
+
+    make_clip_fns = []
+    durations = []
 
     for index, segment in enumerate(segments, start=1):
-        try:
-            # Text-Overlay nur auf den ersten N Cuts (Instagram-Reels-Konvention:
-            # der Hook trägt die Beschriftung, der Rest bleibt clean).
-            segment_overlay = overlay_png
-            if text_on_first_cuts > 0 and index > text_on_first_cuts:
-                segment_overlay = None
-            clip = build_segment_clip(
-                segment,
+        # Text-Overlay nur auf den ersten N Cuts (Instagram-Reels-Konvention:
+        # der Hook trägt die Beschriftung, der Rest bleibt clean).
+        segment_overlay = overlay_png
+        if text_on_first_cuts > 0 and index > text_on_first_cuts:
+            segment_overlay = None
+
+        def _make_clip(seg=segment, over=segment_overlay) -> Any:
+            return build_segment_clip(
+                seg,
                 cfg,
                 grade,
-                segment_overlay,
+                over,
                 fps=fps,
                 width=width,
                 height=height,
-                sources=sources,
+                sources=None,
                 with_audio=with_audio,
             )
-            rendered.append(clip)
+
+        try:
+            # Test-Laden für Fehlertoleranz (falls Clip komplett kaputt ist)
+            # Das öffnet den Clip kurz und schließt ihn sofort wieder.
+            test_clip = _make_clip()
+            actual_duration = float(test_clip.duration)
+            test_clip.close()
+
+            make_clip_fns.append(_make_clip)
+            durations.append(actual_duration)
+
             log.info(
                 "Cut %d/%d: %s %.2f-%.2fs (%.2fs)",
                 index,
@@ -636,34 +764,23 @@ def render_segments(
                 segment.clip.name,
                 segment.start,
                 segment.end,
-                segment.duration,
+                actual_duration,
             )
         except Exception as exc:
-            # Nur der fehlgeschlagene Cut wird verworfen. Die bereits
-            # gerenderten Cuts bleiben erhalten - sonst hätte das Reel vorn
-            # ein Loch und der Schnittplan passte nicht zum Ergebnis.
             message = f"Cut {index} aus {segment.clip.name} fehlgeschlagen: {exc}"
             log.error("%s", message)
             failures.append(message)
-            _close_all(sources)
-            sources = []
 
-    if not rendered:
-        _close_all(sources)
+    if not make_clip_fns:
         return []
 
-    # concatenate_videoclips kann bei gemischten Größen/fehlerhaften
-    # n_frames werfen. Ohne den finally-Block bleiben dann ALLE geöffneten
-    # Reader (je ein ffmpeg-Prozess) bis zum nächsten GC-Cycle hängen.
     try:
-        final = concatenate_videoclips(rendered, method="chain")
+        final = StreamingReel(make_clip_fns, durations, (width, height), with_audio=with_audio)
+        final = final.with_fps(fps)
     except BaseException:
-        _close_all(sources)
-        _close_all(rendered)
         raise
+
     if not with_audio:
-        # Ohne Tonwunsch wird die Spur abgeworfen, damit der Export nicht
-        # versehentlich eine mitgeschleppte Tonspur enthält.
         try:
             final = final.without_audio()
         except Exception:  # pragma: no cover
@@ -674,8 +791,6 @@ def render_segments(
             "(rohvideo.audio_codec=%s)",
             get(cfg, "video.audio_codec", "aac"),
         )
-    # Quell-Reader leben bis nach write_videofile weiter
-    final.tenor_sources = sources  # type: ignore[attr-defined]
     return [final]
 
 
@@ -1564,7 +1679,6 @@ def export_reel(
         raise
     finally:
         _close_all([final])
-        _close_all(getattr(final, "tenor_sources", []) or [])
 
     partial.replace(target)
     # Tatsächliche Dauer aus der fertigen Datei, nicht aus dem Plan: es

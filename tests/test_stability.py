@@ -877,7 +877,7 @@ def test_detect_beat_durations_median_calculation(tmp_path: Path) -> None:
     assert all(1.4 <= d <= 2.0 for d in durations)
 
 
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 
 @patch("src.spotify_beats.get_token")
