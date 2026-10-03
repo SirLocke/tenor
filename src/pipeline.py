@@ -9,6 +9,7 @@ CLI-Beispiel::
 from __future__ import annotations
 
 import argparse
+import contextvars
 import json
 import logging
 import math
@@ -16,6 +17,7 @@ import statistics
 import subprocess
 import sys
 import time
+import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,7 +53,30 @@ from .styling import (
     target_size,
 )
 
-log = logging.getLogger("tenor.pipeline")
+_raw_log = logging.getLogger("tenor.pipeline")
+
+correlation_id: contextvars.ContextVar[str] = contextvars.ContextVar("correlation_id", default="")
+
+class StructuredAdapter(logging.LoggerAdapter):
+    def process(self, msg: Any, kwargs: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+        cid = correlation_id.get()
+        structured = kwargs.pop("structured", None)
+
+        if cid or structured:
+            data: dict[str, Any] = {}
+            if cid:
+                data["correlation_id"] = cid
+            if structured:
+                data.update(structured)
+            try:
+                suffix = json.dumps(data, ensure_ascii=False)
+                suffix = suffix.replace("%", "%%")
+                msg = f"{msg} | {suffix}"
+            except Exception:
+                pass
+        return msg, kwargs
+
+log = StructuredAdapter(_raw_log, {})  # type: ignore[assignment]
 
 
 @dataclass
@@ -643,7 +668,18 @@ def render_segments(
             # gerenderten Cuts bleiben erhalten - sonst hätte das Reel vorn
             # ein Loch und der Schnittplan passte nicht zum Ergebnis.
             message = f"Cut {index} aus {segment.clip.name} fehlgeschlagen: {exc}"
-            log.error("%s", message)
+            log.error(
+                "%s",
+                message,
+                structured={
+                    "event": "render_segment_failed",
+                    "clip": segment.clip.name,
+                    "index": index,
+                    "start": segment.start,
+                    "end": segment.end,
+                    "error": str(exc),
+                },
+            )
             failures.append(message)
             _close_all(sources)
             sources = []
@@ -1195,6 +1231,47 @@ def run(
     Rohclips mit, ``False`` exportiert stumm, ``None`` folgt der Config. Die
     Musik wird in keinem Fall untergemischt.
     """
+    token = correlation_id.set(uuid.uuid4().hex)
+    try:
+        return _run_impl(
+            sources,
+            config_path=config_path,
+            output_dir=output_dir,
+            title=title,
+            music=music,
+            no_cover=no_cover,
+            no_geocoding=no_geocoding,
+            limit=limit,
+            dry_run=dry_run,
+            delete_after=delete_after,
+            duration=duration,
+            grade=grade,
+            pace=pace,
+            lossless=lossless,
+            audio=audio,
+        )
+    finally:
+        correlation_id.reset(token)
+
+
+def _run_impl(
+    sources: Sequence[str | Path],
+    *,
+    config_path: str | None = None,
+    output_dir: str | Path | None = None,
+    title: str | None = None,
+    music: str | Path | None = None,
+    no_cover: bool = False,
+    no_geocoding: bool = False,
+    limit: int = 0,
+    dry_run: bool = False,
+    delete_after: bool = False,
+    duration: float | None = None,
+    grade: str | None = None,
+    pace: str | None = None,
+    lossless: bool = False,
+    audio: bool | None = None,
+) -> RenderResult:
     cfg = load_config(config_path)
     # Overrides explizit durchreichen, damit der Watcher nicht darauf angewiesen
     # ist, dass die Datei auf der Platte schon die richtigen Werte enthält.
@@ -1544,17 +1621,31 @@ def export_reel(
     except Exception as exc:
         partial.unlink(missing_ok=True)
         if bool(video_cfg.get("lossless")):
-            log.warning("Lossless-Export fehlgeschlagen, versuche Standard-Export: %s", exc)
+            log.warning(
+                "Lossless-Export fehlgeschlagen, versuche Standard-Export: %s",
+                exc,
+                structured={"event": "lossless_export_failed", "target": str(target), "error": str(exc)},
+            )
             try:
                 _attempt_export(False)
             except Exception as exc2:
-                log.exception("Export nach %s fehlgeschlagen: %s", partial, exc2)
+                log.exception(
+                    "Export nach %s fehlgeschlagen: %s",
+                    partial,
+                    exc2,
+                    structured={"event": "export_failed", "target": str(target), "error": str(exc2)},
+                )
                 partial.unlink(missing_ok=True)
                 if errors_seen is not None:
                     errors_seen.append(f"Export fehlgeschlagen: {exc2}")
                 return None
         else:
-            log.exception("Export nach %s fehlgeschlagen: %s", partial, exc)
+            log.exception(
+                "Export nach %s fehlgeschlagen: %s",
+                partial,
+                exc,
+                structured={"event": "export_failed", "target": str(target), "error": str(exc)},
+            )
             if errors_seen is not None:
                 errors_seen.append(f"Export fehlgeschlagen: {exc}")
             return None
