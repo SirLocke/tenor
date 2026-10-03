@@ -601,22 +601,30 @@ def render_segments(
     Quellen eine Tonspur, bleibt der betreffende Cut stumm - der Reel bleibt
     dadurch in jedem Fall hörbar, wo Material mit Ton vorliegt.
     """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
     from moviepy import concatenate_videoclips
 
     video_cfg = get(cfg, "video", {}) or {}
     fps = int(video_cfg.get("fps", 30))
     width, height = target_size(cfg)
     failures = on_error if on_error is not None else []
-    rendered: list[Any] = []
-    sources: list[Any] = []
 
-    for index, segment in enumerate(segments, start=1):
+    sources: list[Any] = []
+    sources_lock = threading.Lock()
+    failures_lock = threading.Lock()
+
+    rendered_array: list[Any | None] = [None] * len(segments)
+
+    def _render_one(index: int, segment: Segment) -> None:
+        local_sources: list[Any] = []
         try:
             # Text-Overlay nur auf den ersten N Cuts (Instagram-Reels-Konvention:
             # der Hook trägt die Beschriftung, der Rest bleibt clean).
             segment_overlay = overlay_png
             if text_on_first_cuts > 0 and index > text_on_first_cuts:
                 segment_overlay = None
+
             clip = build_segment_clip(
                 segment,
                 cfg,
@@ -625,10 +633,14 @@ def render_segments(
                 fps=fps,
                 width=width,
                 height=height,
-                sources=sources,
+                sources=local_sources,
                 with_audio=with_audio,
             )
-            rendered.append(clip)
+
+            with sources_lock:
+                sources.extend(local_sources)
+
+            rendered_array[index - 1] = clip
             log.info(
                 "Cut %d/%d: %s %.2f-%.2fs (%.2fs)",
                 index,
@@ -644,9 +656,19 @@ def render_segments(
             # ein Loch und der Schnittplan passte nicht zum Ergebnis.
             message = f"Cut {index} aus {segment.clip.name} fehlgeschlagen: {exc}"
             log.error("%s", message)
-            failures.append(message)
-            _close_all(sources)
-            sources = []
+            with failures_lock:
+                failures.append(message)
+            _close_all(local_sources)
+
+    # Use ThreadPoolExecutor for parallel rendering
+    with ThreadPoolExecutor() as executor:
+        futures = []
+        for i, seg in enumerate(segments, start=1):
+            futures.append(executor.submit(_render_one, i, seg))
+        for future in futures:
+            future.result()
+
+    rendered = [c for c in rendered_array if c is not None]
 
     if not rendered:
         _close_all(sources)
