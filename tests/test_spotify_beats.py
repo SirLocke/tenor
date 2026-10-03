@@ -22,23 +22,36 @@ from src.spotify_beats import (
 class TestExtractTrackId:
     """Tests for extract_track_id."""
 
-    def test_spotify_web_url(self) -> None:
-        url = "https://open.spotify.com/track/4uLU612A35POGL3A3X3iie?si=123456"
-        assert extract_track_id(url) == "4uLU612A35POGL3A3X3iie"
-
-    def test_spotify_uri(self) -> None:
-        uri = "spotify:track:4uLU612A35POGL3A3X3iie"
-        assert extract_track_id(uri) == "4uLU612A35POGL3A3X3iie"
-
-    def test_bare_22_char_id(self) -> None:
-        track_id = "4uLU612A35POGL3A3X3iie"
-        assert extract_track_id(track_id) == "4uLU612A35POGL3A3X3iie"
-
-    def test_invalid_strings(self) -> None:
-        assert extract_track_id("invalid_track_id") is None
-        assert extract_track_id("http://example.com") is None
-        assert extract_track_id("") is None
-        assert extract_track_id(None) is None  # type: ignore[arg-type]
+    @pytest.mark.parametrize(
+        ("input_val", "expected"),
+        [
+            # Spotify Web URLs
+            ("https://open.spotify.com/track/4uLU612A35POGL3A3X3iie?si=123456", "4uLU612A35POGL3A3X3iie"),
+            ("https://open.spotify.com/track/4uLU612A35POGL3A3X3iie", "4uLU612A35POGL3A3X3iie"),
+            ("http://open.spotify.com/track/4uLU612A35POGL3A3X3iie", "4uLU612A35POGL3A3X3iie"),
+            # Spotify URIs and variations
+            ("spotify:track:4uLU612A35POGL3A3X3iie", "4uLU612A35POGL3A3X3iie"),
+            ("track:4uLU612A35POGL3A3X3iie", "4uLU612A35POGL3A3X3iie"),
+            ("track/4uLU612A35POGL3A3X3iie", "4uLU612A35POGL3A3X3iie"),
+            # Bare 22-character IDs
+            ("4uLU612A35POGL3A3X3iie", "4uLU612A35POGL3A3X3iie"),
+            ("0123456789abcdefABCDEF", "0123456789abcdefABCDEF"),
+            ("  4uLU612A35POGL3A3X3iie \n\t", "4uLU612A35POGL3A3X3iie"),
+            # Invalid or unsupported inputs
+            (None, None),
+            ("", None),
+            ("   ", None),
+            ("invalid_track_id", None),
+            ("http://example.com", None),
+            ("spotify:artist:4uLU612A35POGL3A3X3iie", None),
+            ("spotify:album:4uLU612A35POGL3A3X3iie", None),
+            ("4uLU612A35POGL3A3X3ii", None),  # 21 characters (too short)
+            ("4uLU612A35POGL3A3X3iieX", None),  # 23 characters (too long)
+            ("4uLU612A35POGL3A3X!iiie", None),  # Contains invalid character
+        ],
+    )
+    def test_extract_track_id(self, input_val: str | None, expected: str | None) -> None:
+        assert extract_track_id(input_val) == expected  # type: ignore[arg-type]
 
 
 class TestTokenCache:
