@@ -34,6 +34,7 @@ from src.pipeline import (  # noqa: E402
     build_parser,
     durations_from_bpm,
     mix_music,
+    unique_path,
 )
 from src.spotify_beats import extract_track_id  # noqa: E402
 from src.watcher import (  # noqa: E402
@@ -1229,3 +1230,39 @@ def test_spotify_429_max_retries_exceeded(
     result = _auth_get("http://fake.url")
     assert result is None
     assert mock_sleep.call_count == 3
+
+
+# --------------------------------------------------------------------------- #
+# Naming / unique_path
+# --------------------------------------------------------------------------- #
+def test_unique_path_non_existent(tmp_path: Path) -> None:
+    """Wenn die Zieldatei noch nicht existiert, wird stem + suffix direkt zurückgegeben."""
+    res = unique_path(tmp_path, "reel", ".mp4")
+    assert res == tmp_path / "reel.mp4"
+
+
+def test_unique_path_single_collision(tmp_path: Path) -> None:
+    """Wenn reel.mp4 bereits existiert, soll reel_2.mp4 zurückgegeben werden."""
+    (tmp_path / "reel.mp4").touch()
+    res = unique_path(tmp_path, "reel", ".mp4")
+    assert res == tmp_path / "reel_2.mp4"
+
+
+def test_unique_path_multiple_collisions(tmp_path: Path) -> None:
+    """Wenn reel.mp4, reel_2.mp4, reel_3.mp4 existieren, wird reel_4.mp4 vergeben."""
+    (tmp_path / "reel.mp4").touch()
+    (tmp_path / "reel_2.mp4").touch()
+    (tmp_path / "reel_3.mp4").touch()
+    res = unique_path(tmp_path, "reel", ".mp4")
+    assert res == tmp_path / "reel_4.mp4"
+
+
+def test_unique_path_different_suffixes(tmp_path: Path) -> None:
+    """Ebenso mit anderen Endungen/Suffixen (z. B. .jpg oder ohne Endung)."""
+    (tmp_path / "cover.jpg").touch()
+    res_jpg = unique_path(tmp_path, "cover", ".jpg")
+    assert res_jpg == tmp_path / "cover_2.jpg"
+
+    (tmp_path / "folder").touch()
+    res_no_ext = unique_path(tmp_path, "folder", "")
+    assert res_no_ext == tmp_path / "folder_2"
