@@ -33,7 +33,7 @@ from . import (
     setup_logging,
     slugify,
 )
-from .metadata import ClipInfo, Geocoder, collect_clips, dominant_geo, dominant_place, primary_place
+from .metadata import ClipInfo, Geocoder, collect_clips, dominant_place, primary_place
 from .quality import (
     ClipAnalysis,
     QualityConfig,
@@ -49,6 +49,7 @@ from .styling import (
     build_subtitle,
     build_text_overlay,
     center_crop_resize,
+    format_coordinates,
     make_grader,
     target_size,
 )
@@ -881,10 +882,12 @@ def mix_music(
         return None
 
 
-def make_overlay_array(cfg: Mapping[str, Any], title: str, subtitle: str) -> np.ndarray:
+def make_overlay_array(cfg: Mapping[str, Any], title: str, subtitle: str, geo_tag: str = "") -> np.ndarray:
     """Text-Overlay als RGBA-Numpy-Array für ``ImageClip``."""
     width, height = target_size(cfg)
-    image = build_text_overlay(cfg, title=title, subtitle=subtitle, width=width, height=height)
+    image = build_text_overlay(
+        cfg, title=title, subtitle=subtitle, geo_tag=geo_tag, width=width, height=height
+    )
     if image.mode != "RGBA":
         image = image.convert("RGBA")
     return np.asarray(image, dtype=np.uint8)
@@ -1520,14 +1523,14 @@ def run(
         return result
 
     place = dominant_place(usable)
-    geo_tag = dominant_geo(usable)
     result.place = place
     reference = usable[0]
     # Ohne expliziten Titel: Tripname aus dem Ingest-Unterordner, dann
     # Ortsname (Kurzform), dann Datum, sonst "Tenor".
     trip = trip_from_path([str(c.path) for c in usable], sources, get(cfg, "ingest_dir"))
     effective_title = title or trip or primary_place(place) or reference.date_label or "Tenor"
-    subtitle = build_subtitle(place, reference.date_label, geo_tag)
+    subtitle = build_subtitle(place, reference.date_label)
+
     result.title = effective_title
     result.trip = trip
     result.subtitle = subtitle
@@ -1630,9 +1633,15 @@ def run(
             continue
 
         day_place = dominant_place(day_clips)
-        day_geo = dominant_geo(day_clips)
         day_title = title or trip or primary_place(day_place) or day
-        day_subtitle = build_subtitle(day_place, day, day_geo)
+        day_subtitle = build_subtitle(day_place, day)
+
+        day_geo_tag = ""
+        # Find the first clip in the day that has geo
+        for segment in day_segments:
+            if segment.clip.has_geo and segment.clip.latitude is not None and segment.clip.longitude is not None:
+                day_geo_tag = format_coordinates(segment.clip.latitude, segment.clip.longitude)
+                break
 
         target = export_reel(
             day_segments,
@@ -1640,6 +1649,7 @@ def run(
             base_out,
             title=day_title,
             subtitle=day_subtitle,
+            geo_tag=day_geo_tag,
             day=day,
             grade=grade_obj,
             when=now,
@@ -1691,6 +1701,7 @@ def export_reel(
     *,
     title: str,
     subtitle: str,
+    geo_tag: str = "",
     day: str,
     grade: GradeConfig,
     when: float,
@@ -1734,7 +1745,7 @@ def export_reel(
     partial.unlink(missing_ok=True)
 
     try:
-        overlay = make_overlay_array(cfg, title, subtitle)
+        overlay = make_overlay_array(cfg, title, subtitle, geo_tag)
     except Exception as exc:
         log.error("Text-Overlay konnte nicht gerendert werden (%s) - exportiere ohne Text", exc)
         overlay = None
