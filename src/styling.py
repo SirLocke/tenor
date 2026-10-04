@@ -13,13 +13,14 @@ rechtsbündig verankert - ohne Box, mit weichem Drop-Shadow.
 
 from __future__ import annotations
 
-import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from logging import getLogger
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -316,8 +317,8 @@ def _download_font(url: str, target: Path) -> bool:
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(target.suffix + ".part")
     try:
-        request = urllib.request.Request(url, headers={"User-Agent": "tenor/1.0"})
-        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310 - feste Mirror-URLs
+        request = Request(url, headers={"User-Agent": "tenor/1.0"})
+        with urlopen(request, timeout=20) as response:  # noqa: S310 - feste Mirror-URLs
             payload = response.read()
         if len(payload) < 4096:
             log.warning("Font-Download zu klein, wird verworfen: %s", url)
@@ -326,7 +327,7 @@ def _download_font(url: str, target: Path) -> bool:
         tmp.replace(target)
         log.info("Font geladen: %s", target)
         return True
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+    except (URLError, OSError, ValueError) as exc:
         log.debug("Font-Download fehlgeschlagen (%s): %s", url, exc)
         tmp.unlink(missing_ok=True)
         return False
