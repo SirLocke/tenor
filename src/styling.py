@@ -404,9 +404,10 @@ def _draw_tracked(
     widths = [draw.textlength(ch, font=font) for ch in text]
     total = float(sum(widths) + tracking * max(len(text) - 1, 0))
     x = (anchor_right - total) if anchor_right is not None else xy[0]
-    y = xy[1]
+    y_offset = font.getbbox("A", anchor="ls")[1]
+    y = xy[1] - y_offset
     for char, width in zip(text, widths):
-        draw.text((x, y), char, font=font, fill=fill, anchor="lt")
+        draw.text((x, y), char, font=font, fill=fill, anchor="ls")
         x += width + tracking
     return total
 
