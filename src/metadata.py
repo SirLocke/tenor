@@ -603,6 +603,21 @@ def dominant_place(clips: Iterable[ClipInfo]) -> str | None:
     return max(counts.items(), key=lambda item: (item[1], -places.index(item[0])))[0]
 
 
+def dominant_geo(clips: Iterable[ClipInfo]) -> str | None:
+    """Häufigste Koordinate in einer Clipliste."""
+    geos = [
+        f"{c.latitude:.4f}, {c.longitude:.4f}"
+        for c in clips
+        if c.has_geo and c.latitude is not None and c.longitude is not None
+    ]
+    if not geos:
+        return None
+    counts: dict[str, int] = {}
+    for geo in geos:
+        counts[geo] = counts.get(geo, 0) + 1
+    return max(counts.items(), key=lambda item: (item[1], -geos.index(item[0])))[0]
+
+
 def primary_place(place: str | None) -> str | None:
     """Kürzester sinnvoller Ortsname aus ``"São Roque, Funchal, Madeira, PT"``.
 
