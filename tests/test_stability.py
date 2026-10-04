@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from types import SimpleNamespace
 from typing import Any
 
@@ -1141,9 +1141,6 @@ def test_detect_beat_durations_median_calculation(tmp_path: Path) -> None:
 
     assert len(durations) > 0
     assert all(1.4 <= d <= 2.0 for d in durations)
-
-
-from unittest.mock import Mock, patch
 
 
 @patch("src.spotify_beats.get_token")
