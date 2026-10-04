@@ -404,10 +404,9 @@ def _draw_tracked(
     widths = [draw.textlength(ch, font=font) for ch in text]
     total = float(sum(widths) + tracking * max(len(text) - 1, 0))
     x = (anchor_right - total) if anchor_right is not None else xy[0]
-    y_offset = font.getbbox("A", anchor="ls")[1]
-    y = xy[1] - y_offset
+    y = xy[1]
     for char, width in zip(text, widths):
-        draw.text((x, y), char, font=font, fill=fill, anchor="ls")
+        draw.text((x, y), char, font=font, fill=fill, anchor="lt")
         x += width + tracking
     return total
 
@@ -606,8 +605,8 @@ def build_text_overlay(
     return Image.alpha_composite(image, text_layer)
 
 
-def build_subtitle(place: str | None, date_label: str, geo_tag: str | None = None) -> str:
-    """Zeile 2: Ort + Datum + Geotag, jeweils optional."""
-    parts = [p for p in (place, date_label, geo_tag) if p]
+def build_subtitle(place: str | None, date_label: str) -> str:
+    """Zeile 2: Ort + Datum, jeweils optional."""
+    parts = [p for p in (place, date_label) if p]
     return "  ·  ".join(parts)
 

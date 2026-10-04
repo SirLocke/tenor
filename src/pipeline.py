@@ -33,7 +33,7 @@ from . import (
     setup_logging,
     slugify,
 )
-from .metadata import ClipInfo, Geocoder, collect_clips, dominant_geo, dominant_place, primary_place
+from .metadata import ClipInfo, Geocoder, collect_clips, dominant_place, primary_place
 from .quality import (
     ClipAnalysis,
     QualityConfig,
@@ -1523,14 +1523,14 @@ def run(
         return result
 
     place = dominant_place(usable)
-    geo_tag = dominant_geo(usable)
     result.place = place
     reference = usable[0]
     # Ohne expliziten Titel: Tripname aus dem Ingest-Unterordner, dann
     # Ortsname (Kurzform), dann Datum, sonst "Tenor".
     trip = trip_from_path([str(c.path) for c in usable], sources, get(cfg, "ingest_dir"))
     effective_title = title or trip or primary_place(place) or reference.date_label or "Tenor"
-    subtitle = build_subtitle(place, reference.date_label, geo_tag)
+    subtitle = build_subtitle(place, reference.date_label)
+
     result.title = effective_title
     result.trip = trip
     result.subtitle = subtitle
@@ -1633,9 +1633,8 @@ def run(
             continue
 
         day_place = dominant_place(day_clips)
-        day_geo = dominant_geo(day_clips)
         day_title = title or trip or primary_place(day_place) or day
-        day_subtitle = build_subtitle(day_place, day, day_geo)
+        day_subtitle = build_subtitle(day_place, day)
 
         day_geo_tag = ""
         # Find the first clip in the day that has geo
