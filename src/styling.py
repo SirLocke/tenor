@@ -460,11 +460,19 @@ def _line_height(font: ImageFont.FreeTypeFont) -> float:
     return float(bbox[3] - bbox[1])
 
 
+def format_coordinates(lat: float, lon: float) -> str:
+    """Formatiert Koordinaten (z.B. 53.5510° N, 9.9930° E)."""
+    lat_dir = "N" if lat >= 0 else "S"
+    lon_dir = "E" if lon >= 0 else "W"
+    return f"{abs(lat):.4f}° {lat_dir}, {abs(lon):.4f}° {lon_dir}"
+
+
 def build_text_overlay(
     cfg: Mapping[str, Any],
     *,
     title: str,
     subtitle: str = "",
+    geo_tag: str = "",
     width: int | None = None,
     height: int | None = None,
 ) -> Image.Image:
@@ -495,10 +503,14 @@ def build_text_overlay(
         title_text = title_text.upper()
     subtitle_text = (subtitle or "").strip()
 
+    geo_tag_text = (geo_tag or "").strip()
+
     title_font = load_font(cfg, "bold", int(text_cfg.get("title_size", 36)))
     subtitle_font = load_font(cfg, "regular", int(text_cfg.get("subtitle_size", 24)))
+    geo_font = load_font(cfg, "mono", int(text_cfg.get("geo_size", 16)))
     title_tracking = int(text_cfg.get("title_tracking", 3))
     subtitle_tracking = int(text_cfg.get("subtitle_tracking", 1))
+    geo_tracking = int(text_cfg.get("geo_tracking", 2))
 
     measure = ImageDraw.Draw(image)
     title_lines = wrap_text(measure, title_text, title_font, title_tracking, max_width) if title_text else []
@@ -507,7 +519,12 @@ def build_text_overlay(
         if subtitle_text
         else []
     )
-    if not title_lines and not subtitle_lines:
+    geo_lines = (
+        wrap_text(measure, geo_tag_text, geo_font, geo_tracking, max_width, max_lines=1)
+        if geo_tag_text
+        else []
+    )
+    if not title_lines and not subtitle_lines and not geo_lines:
         return image
 
     # (Zeilen, Font, Farbe, Tracking, Zeilenhöhe)
@@ -530,6 +547,16 @@ def build_text_overlay(
                 str(text_cfg.get("subtitle_color", "#D0D5DD")),
                 subtitle_tracking,
                 _line_height(subtitle_font),
+            )
+        )
+    if geo_lines:
+        blocks.append(
+            (
+                geo_lines,
+                geo_font,
+                str(text_cfg.get("geo_color", "#9CA3AF")),
+                geo_tracking,
+                _line_height(geo_font),
             )
         )
 
