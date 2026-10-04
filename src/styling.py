@@ -578,8 +578,8 @@ def build_text_overlay(
     return Image.alpha_composite(image, text_layer)
 
 
-def build_subtitle(place: str | None, date_label: str) -> str:
-    """Zeile 2: Ort + Datum, jeweils optional."""
-    parts = [p for p in (place, date_label) if p]
+def build_subtitle(place: str | None, date_label: str, geo_tag: str | None = None) -> str:
+    """Zeile 2: Ort + Datum + Geotag, jeweils optional."""
+    parts = [p for p in (place, date_label, geo_tag) if p]
     return "  ·  ".join(parts)
 
