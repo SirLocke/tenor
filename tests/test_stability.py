@@ -1042,6 +1042,25 @@ def test_resolve_beats_reports_blocked_spotify(tmp_path: Path) -> None:
     assert "403" in note
 
 
+def test_resolve_beats_respects_override_bpm() -> None:
+    """Wenn override_bpm gesetzt ist, wird Spotify und Musikdatei übersprungen."""
+    import src.pipeline as pipeline_module
+
+    cfg = _base_cfg()
+    cfg["spotify"] = {"enabled": True, "track_uri": "spotify:track:xyz"}
+    cut_cfg = {
+        "override_bpm": 140.0,
+        "target_min": 1.4,
+        "target_max": 2.0,
+        "target": 1.7,
+    }
+    durations, source, note = pipeline_module._resolve_beats(None, cfg, cut_cfg)
+
+    assert durations
+    assert source == "override:140bpm"
+    assert "BPM explizit überschrieben" in note
+
+
 def test_resolve_beats_falls_back_to_bpm_with_reason(tmp_path: Path) -> None:
     """Ohne jede Audiodatei bleibt der BPM-Takt - mit Begründung, nicht stumm."""
     import src.pipeline as pipeline_module

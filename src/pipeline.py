@@ -1313,6 +1313,12 @@ def _resolve_beats(
     durations: list[float] = []
     beat_source = ""
 
+    override_bpm = cut_cfg.get("override_bpm")
+    if override_bpm:
+        durations = durations_from_bpm(override_bpm, cut_cfg)
+        beat_source = f"override:{override_bpm:g}bpm"
+        return durations, beat_source, "BPM explizit überschrieben"
+
     explicit_uri = isinstance(music, str) and music.startswith("spotify:")
     explicit_file = bool(music) and not explicit_uri
 
@@ -1441,6 +1447,7 @@ def run(
     pace: str | None = None,
     lossless: bool = False,
     audio: bool | None = None,
+    bpm: float | None = None,
 ) -> RenderResult:
     """Kompletter Pipeline-Lauf: Metadaten -> Schnitt -> Render -> Export.
 
@@ -1469,6 +1476,8 @@ def run(
 
     video_cfg = get(cfg, "video", {}) or {}
     cut_cfg = dict(get(cfg, "cut", {}) or {})
+    if bpm is not None:
+        cut_cfg["override_bpm"] = float(bpm)
 
     # Schnitt-Tempo / Pacing anpassen
     effective_pace = pace
@@ -1965,6 +1974,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Schnitt-Tempo (fast = ~1.5s, medium = ~2.3s, slow = ~3.2s)",
     )
+    parser.add_argument(
+        "--bpm",
+        type=float,
+        default=None,
+        help="BPM-Wert für den Schnitt erzwingen (ignoriert Musik-Beats)",
+    )
     audio_group = parser.add_mutually_exclusive_group()
     audio_group.add_argument(
         "--audio",
@@ -2020,6 +2035,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         pace=args.pace,
         lossless=args.lossless,
         audio=args.audio,
+        bpm=args.bpm,
     )
 
     if args.json:
