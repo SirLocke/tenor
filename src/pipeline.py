@@ -1441,6 +1441,7 @@ def run(
     pace: str | None = None,
     lossless: bool = False,
     audio: bool | None = None,
+    bpm: float | None = None,
 ) -> RenderResult:
     """Kompletter Pipeline-Lauf: Metadaten -> Schnitt -> Render -> Export.
 
@@ -1466,6 +1467,9 @@ def run(
     if grade is not None:
         cfg.setdefault("style", {})
         cfg["style"]["preset"] = str(grade).lower()
+    if bpm is not None:
+        cfg.setdefault("cut", {})
+        cfg["cut"]["fallback_bpm"] = float(bpm)
 
     video_cfg = get(cfg, "video", {}) or {}
     cut_cfg = dict(get(cfg, "cut", {}) or {})
@@ -1965,6 +1969,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Schnitt-Tempo (fast = ~1.5s, medium = ~2.3s, slow = ~3.2s)",
     )
+    parser.add_argument(
+        "--bpm",
+        type=float,
+        default=None,
+        help="Expliziter BPM-Wert (überschreibt cut.fallback_bpm)",
+    )
     audio_group = parser.add_mutually_exclusive_group()
     audio_group.add_argument(
         "--audio",
@@ -2020,6 +2030,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         pace=args.pace,
         lossless=args.lossless,
         audio=args.audio,
+        bpm=args.bpm,
     )
 
     if args.json:
