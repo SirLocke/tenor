@@ -306,6 +306,25 @@ class TestTrackName:
 class TestFetchSpotifyBeats:
     """Tests for fetch_spotify_beats."""
 
+    def test_fetch_spotify_beats_manual_bpm(self) -> None:
+        track_data = {"duration_ms": 120000} # 120 seconds
+        with patch("src.spotify_beats._auth_get", return_value=track_data):
+            beats = fetch_spotify_beats("4uLU612A35POGL3A3X3iie", manual_bpm=120.0)
+            assert beats is not None
+            # 120 bpm = 2 beats per second. 120 sec * 2 = 240 beats + 1 = 241
+            assert len(beats) == 241
+            assert beats[0] == 0.0
+            assert beats[1] == 0.5
+
+    def test_fetch_spotify_beats_manual_bpm_no_duration(self) -> None:
+        with patch("src.spotify_beats._auth_get", return_value=None):
+            beats = fetch_spotify_beats("4uLU612A35POGL3A3X3iie", manual_bpm=60.0)
+            assert beats is not None
+            # 60 bpm = 1 beat per sec. Default 300 sec = 301 beats
+            assert len(beats) == 301
+            assert beats[0] == 0.0
+            assert beats[1] == 1.0
+
     def test_fetch_spotify_beats_invalid_uri(self) -> None:
         assert fetch_spotify_beats("invalid") is None
 

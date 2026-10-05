@@ -245,12 +245,25 @@ def track_name(track_uri: str) -> str | None:
     return f"{artist} - {title}" if artist and title else (title or None)
 
 
-def fetch_spotify_beats(track_uri: str) -> list[float] | None:
+def fetch_spotify_beats(track_uri: str, manual_bpm: float | None = None) -> list[float] | None:
     """Beat-Startzeiten in Sekunden aus Spotify Audio Analysis."""
     track_id = extract_track_id(track_uri)
     if not track_id:
         log.warning("Ungültige Spotify-Referenz: %r", track_uri)
         return None
+
+    if manual_bpm is not None and manual_bpm > 0:
+        track_data = _auth_get(SPOTIFY_TRACK_URL.format(track_id=track_id))
+        duration_s = 300.0  # Fallback auf 5 Min
+        if isinstance(track_data, dict):
+            duration_ms = track_data.get("duration_ms")
+            if duration_ms and isinstance(duration_ms, (int, float)):
+                duration_s = float(duration_ms) / 1000.0
+
+        interval = 60.0 / manual_bpm
+        beats = [float(i) * interval for i in range(int(duration_s / interval) + 1)]
+        log.info("Spotify: %d Beats (manuell %.1f BPM) generiert für %s", len(beats), manual_bpm, track_uri)
+        return beats
 
     data = _auth_get(SPOTIFY_ANALYSIS_URL.format(track_id=track_id), quota_locked=True)
     if data is None:

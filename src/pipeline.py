@@ -1188,7 +1188,16 @@ def _fetch_spotify_beats(
         log.warning("Spotify-Modul nicht verfügbar (%s)", exc)
         return None, f"Spotify-Modul nicht verfügbar ({exc})"
     try:
-        beats = fetch_spotify_beats(track_uri)
+        manual_bpm = None
+        if spotify_cfg and "manual_bpm" in spotify_cfg:
+            try:
+                manual_bpm_val = float(spotify_cfg["manual_bpm"])
+                if manual_bpm_val > 0:
+                    manual_bpm = manual_bpm_val
+            except (ValueError, TypeError):
+                pass
+
+        beats = fetch_spotify_beats(track_uri, manual_bpm=manual_bpm)
     except SpotifyAccessError as exc:
         # Kein Konfigurationsfehler, sondern eine API-Sperre: einmal deutlich
         # benennen und dann auf die lokale Datei bzw. den BPM-Fallback
