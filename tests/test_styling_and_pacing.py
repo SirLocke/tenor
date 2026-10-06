@@ -4,9 +4,70 @@ sowie flexible Reel-Dauer und Schnitt-Pacing.
 
 from pathlib import Path
 
+import numpy as np
+import pytest
+
 from src.metadata import ClipInfo
 from src.pipeline import build_parser, build_segments
-from src.styling import GradeConfig, make_grader
+from src.styling import GradeConfig, apply_grade, make_grader
+
+
+class TestApplyGradeEdgeCases:
+    @pytest.fixture
+    def identity_grade(self) -> GradeConfig:
+        return GradeConfig(preset="original")
+
+    @pytest.fixture
+    def identity_lut(self) -> np.ndarray:
+        return np.arange(256, dtype=np.uint8)
+
+    def test_apply_grade_standard_rgb(self, identity_grade: GradeConfig, identity_lut: np.ndarray) -> None:
+        frame = np.full((10, 10, 3), 128, dtype=np.uint8)
+        out = apply_grade(frame, identity_lut, identity_grade)
+        assert isinstance(out, np.ndarray)
+        assert out.dtype == np.uint8
+        assert out.shape == (10, 10, 3)
+
+    def test_apply_grade_2d_grayscale(self, identity_grade: GradeConfig, identity_lut: np.ndarray) -> None:
+        frame = np.full((10, 10), 100, dtype=np.uint8)
+        out = apply_grade(frame, identity_lut, identity_grade)
+        assert out.shape == (10, 10, 3)
+        assert out.dtype == np.uint8
+
+    def test_apply_grade_non_uint8_and_clamping(
+        self, identity_grade: GradeConfig, identity_lut: np.ndarray
+    ) -> None:
+        frame = np.array([[-50, 100, 300]], dtype=np.int32).reshape((1, 1, 3))
+        out = apply_grade(frame, identity_lut, identity_grade)
+        assert out.dtype == np.uint8
+        assert out.shape == (1, 1, 3)
+
+    def test_apply_grade_rgba_conversion(self, identity_grade: GradeConfig, identity_lut: np.ndarray) -> None:
+        frame = np.full((10, 10, 4), 200, dtype=np.uint8)
+        out = apply_grade(frame, identity_lut, identity_grade)
+        assert out.shape == (10, 10, 3)
+        assert out.dtype == np.uint8
+
+    def test_apply_grade_numpy_fallback_without_cv2(
+        self, identity_grade: GradeConfig, identity_lut: np.ndarray, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import src.styling
+
+        monkeypatch.setattr(src.styling, "cv2", None)
+        frame = np.full((5, 5, 3), 150, dtype=np.uint8)
+        out = apply_grade(frame, identity_lut, identity_grade)
+        assert out.shape == (5, 5, 3)
+        assert out.dtype == np.uint8
+
+    def test_apply_grade_cinematic_preset_transformation(self) -> None:
+        grade = GradeConfig.from_config({}, preset="cinematic")
+        lut = grade.lut8()
+        frame = np.full((10, 10, 3), 128, dtype=np.uint8)
+        out = apply_grade(frame, lut, grade)
+        assert out.shape == (10, 10, 3)
+        assert out.dtype == np.uint8
+        # Output should differ from raw input for cinematic preset
+        assert not np.array_equal(out, frame)
 
 
 class TestGradePresets:
