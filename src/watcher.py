@@ -75,11 +75,12 @@ def is_media(path: Path, extensions: Sequence[str]) -> bool:
 
 
 def size_stable(path: Path, checks: int = 2, poll: float = 1.0) -> bool:
-    """True, wenn die Dateigröße über ``checks`` Messungen konstant bleibt."""
-    last: int | None = None
+    """True, wenn Dateigröße und -änderungszeit über ``checks`` Messungen konstant bleiben."""
+    last: tuple[int, float] | None = None
     for _ in range(max(checks, 1)):
         try:
-            current = get_stat(path).st_size
+            stat = get_stat(path)
+            current = (stat.st_size, stat.st_mtime)
         except OSError:
             return False
         if last is not None and current != last:
@@ -93,7 +94,7 @@ def size_stable(path: Path, checks: int = 2, poll: float = 1.0) -> bool:
 def wait_until_stable(
     path: Path, stable_seconds: float, poll: float = 1.0, max_wait: float = 0.0
 ) -> bool:
-    """Blockiert, bis die Dateigröße ``stable_seconds`` lang stabil ist.
+    """Blockiert, bis Dateigröße und -änderungszeit ``stable_seconds`` lang stabil sind.
 
     ``max_wait`` (Sekunden) setzt eine harte Obergrenze. Ohne sie blieb der
     Thread bei einer endlos wachsenden Datei für immer hängen - ein Thread
@@ -101,12 +102,13 @@ def wait_until_stable(
     """
     start = time.monotonic()
     hard_deadline = start + max_wait if max_wait > 0 else None
-    last_size: int | None = None
+    last_state: tuple[int, float] | None = None
     stable_since: float | None = None
 
     while True:
         try:
-            size = get_stat(path).st_size
+            stat = get_stat(path)
+            current_state = (stat.st_size, stat.st_mtime)
         except FileNotFoundError:
             return False
         except OSError as exc:
@@ -114,8 +116,8 @@ def wait_until_stable(
             return False
 
         now = time.monotonic()
-        if size != last_size:
-            last_size = size
+        if current_state != last_state:
+            last_state = current_state
             stable_since = now
         elif stable_since is not None and now - stable_since >= stable_seconds:
             return True
