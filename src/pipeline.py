@@ -13,6 +13,7 @@ import json
 import logging
 import math
 import os
+import shlex
 import statistics
 import subprocess
 import sys
@@ -1914,16 +1915,22 @@ def scan_nextcloud(cfg: Mapping[str, Any], output_dir: Path) -> None:
     if not nc_cfg.get("enabled", False):
         return
     cmd_template = nc_cfg.get("scan_cmd")
-    if not cmd_template:
+    if not cmd_template or not isinstance(cmd_template, str):
         return
-    # Platzhalter {output_dir} ersetzen
-    cmd = cmd_template.format(output_dir=output_dir)
+    try:
+        cmd_tokens = shlex.split(cmd_template)
+    except ValueError as exc:
+        log.warning("Nextcloud-Scan Befehl ungültig: %s", exc)
+        return
+    if not cmd_tokens:
+        return
+    cmd = [tok.format(output_dir=output_dir) for tok in cmd_tokens]
     timeout = int(nc_cfg.get("timeout", 30) or 0)
-    log.info("Nextcloud-Scan: %s", cmd)
+    log.info("Nextcloud-Scan: %s", " ".join(cmd))
     try:
         subprocess.run(
             cmd,
-            shell=True,
+            shell=False,
             timeout=timeout,
             check=False,
             capture_output=True,
