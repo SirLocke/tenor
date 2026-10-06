@@ -6,7 +6,49 @@ from pathlib import Path
 
 from src.metadata import ClipInfo
 from src.pipeline import build_parser, build_segments
-from src.styling import GradeConfig, make_grader
+from PIL import Image, ImageDraw, ImageFont
+
+from src.styling import GradeConfig, TextStyle, make_grader, wrap_text
+
+
+class TestTextStyleAndWrapText:
+    def test_text_style_defaults(self) -> None:
+        font = ImageFont.load_default()
+        style = TextStyle(font=font)
+        assert style.font == font
+        assert style.tracking == 0
+        assert style.max_width == float("inf")
+        assert style.max_lines == 3
+
+    def test_wrap_text_empty_string(self) -> None:
+        img = Image.new("RGBA", (100, 100))
+        draw = ImageDraw.Draw(img)
+        font = ImageFont.load_default()
+        style = TextStyle(font=font)
+        assert wrap_text(draw, "", style) == []
+        assert wrap_text(draw, "   ", style) == []
+
+    def test_wrap_text_single_line(self) -> None:
+        img = Image.new("RGBA", (1000, 100))
+        draw = ImageDraw.Draw(img)
+        font = ImageFont.load_default()
+        style = TextStyle(font=font, max_width=1000.0)
+        lines = wrap_text(draw, "Hello World", style)
+        assert lines == ["Hello World"]
+
+    def test_wrap_text_multi_line_and_truncation(self) -> None:
+        img = Image.new("RGBA", (1000, 100))
+        draw = ImageDraw.Draw(img)
+        font = ImageFont.load_default()
+        # "Hello World" fits on line 1, "Py" fits on line 2
+        style_2lines = TextStyle(font=font, max_width=60.0, max_lines=2)
+        lines = wrap_text(draw, "Hello World Py", style_2lines)
+        assert lines == ["Hello World", "Py"]
+
+        # Truncation with ellipsis when exceeding max_lines limit
+        lines_trunc = wrap_text(draw, "Hello World Python Programming", style_2lines)
+        assert len(lines_trunc) <= 2
+        assert any(line.endswith("…") for line in lines_trunc)
 
 
 class TestGradePresets:

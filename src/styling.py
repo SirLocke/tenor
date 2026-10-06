@@ -412,19 +412,27 @@ def _draw_tracked(
     return total
 
 
+@dataclass(frozen=True)
+class TextStyle:
+    """Konfiguration für Textformatierung und Zeilenumbruch."""
+
+    font: ImageFont.FreeTypeFont
+    tracking: int = 0
+    max_width: float = float("inf")
+    max_lines: int = 3
+
+
 def _fit_line(
     draw: ImageDraw.ImageDraw,
     text: str,
-    font: ImageFont.FreeTypeFont,
-    tracking: int,
-    max_width: float,
+    style: TextStyle,
 ) -> str:
-    """Kürzt einen Text zeichenweise mit Ellipse auf ``max_width``."""
-    if _text_width(draw, text, font, tracking) <= max_width:
+    """Kürzt einen Text zeichenweise mit Ellipse auf ``style.max_width``."""
+    if _text_width(draw, text, style.font, style.tracking) <= style.max_width:
         return text
     ellipsis = "…"
     trimmed = text
-    while trimmed and _text_width(draw, trimmed + ellipsis, font, tracking) > max_width:
+    while trimmed and _text_width(draw, trimmed + ellipsis, style.font, style.tracking) > style.max_width:
         trimmed = trimmed[:-1].rstrip()
     return f"{trimmed}{ellipsis}" if trimmed else ellipsis
 
@@ -432,12 +440,9 @@ def _fit_line(
 def wrap_text(
     draw: ImageDraw.ImageDraw,
     text: str,
-    font: ImageFont.FreeTypeFont,
-    tracking: int,
-    max_width: float,
-    max_lines: int = 3,
+    style: TextStyle,
 ) -> list[str]:
-    """Bricht Text an Wortgrenzen auf ``max_width`` um (Zeichen-Tracking berücksichtigt)."""
+    """Bricht Text an Wortgrenzen auf ``style.max_width`` um (Zeichen-Tracking berücksichtigt)."""
     words = text.split()
     if not words:
         return []
@@ -445,15 +450,15 @@ def wrap_text(
     current = words[0]
     for index, word in enumerate(words[1:], start=1):
         candidate = f"{current} {word}"
-        if _text_width(draw, candidate, font, tracking) <= max_width:
+        if _text_width(draw, candidate, style.font, style.tracking) <= style.max_width:
             current = candidate
             continue
         lines.append(current)
-        if len(lines) >= max_lines:
-            return [_fit_line(draw, " ".join(words[index:]), font, tracking, max_width)]
+        if len(lines) >= style.max_lines:
+            return [_fit_line(draw, " ".join(words[index:]), style)]
         current = word
     lines.append(current)
-    return lines[:max_lines]
+    return lines[:style.max_lines]
 
 
 def _line_height(font: ImageFont.FreeTypeFont) -> float:
@@ -514,17 +519,19 @@ def build_text_overlay(
     geo_tracking = int(text_cfg.get("geo_tracking", 2))
 
     measure = ImageDraw.Draw(image)
-    title_lines = wrap_text(measure, title_text, title_font, title_tracking, max_width) if title_text else []
-    subtitle_lines = (
-        wrap_text(measure, subtitle_text, subtitle_font, subtitle_tracking, max_width, max_lines=2)
-        if subtitle_text
-        else []
+    title_style = TextStyle(
+        font=title_font, tracking=title_tracking, max_width=max_width, max_lines=3
     )
-    geo_lines = (
-        wrap_text(measure, geo_tag_text, geo_font, geo_tracking, max_width, max_lines=1)
-        if geo_tag_text
-        else []
+    subtitle_style = TextStyle(
+        font=subtitle_font, tracking=subtitle_tracking, max_width=max_width, max_lines=2
     )
+    geo_style = TextStyle(
+        font=geo_font, tracking=geo_tracking, max_width=max_width, max_lines=1
+    )
+
+    title_lines = wrap_text(measure, title_text, title_style) if title_text else []
+    subtitle_lines = wrap_text(measure, subtitle_text, subtitle_style) if subtitle_text else []
+    geo_lines = wrap_text(measure, geo_tag_text, geo_style) if geo_tag_text else []
     if not title_lines and not subtitle_lines and not geo_lines:
         return image
 
