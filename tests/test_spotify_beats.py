@@ -123,16 +123,80 @@ class TestGetToken:
 
             assert get_token(force=True) is None
 
-    def test_get_token_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.parametrize(
+        "exception_instance",
+        [
+            TimeoutError("Request timed out"),
+            ConnectionError("Failed to connect"),
+            ValueError("Invalid JSON returned"),
+            KeyError("access_token"),
+            RuntimeError("Unexpected error"),
+        ],
+    )
+    def test_get_token_exception_handling(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        exception_instance: Exception,
+    ) -> None:
         monkeypatch.setenv("SPOTIFY_CLIENT_ID", "id")
         monkeypatch.setenv("SPOTIFY_CLIENT_SECRET", "secret")
 
         with patch("src.spotify_beats._requests") as mock_req_fn:
             mock_requests = MagicMock()
-            mock_requests.post.side_effect = Exception("Connection error")
+            mock_requests.post.side_effect = exception_instance
             mock_req_fn.return_value = mock_requests
 
-            assert get_token(force=True) is None
+            with caplog.at_level("WARNING"):
+                assert get_token(force=True) is None
+
+            assert "Spotify-Token nicht erhältlich:" in caplog.text
+            assert str(exception_instance) in caplog.text or repr(exception_instance) in caplog.text
+
+    def test_get_token_raise_for_status_exception(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("SPOTIFY_CLIENT_ID", "id")
+        monkeypatch.setenv("SPOTIFY_CLIENT_SECRET", "secret")
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        http_error = RuntimeError("500 Server Error")
+        mock_resp.raise_for_status.side_effect = http_error
+
+        with patch("src.spotify_beats._requests") as mock_req_fn:
+            mock_requests = MagicMock()
+            mock_requests.post.return_value = mock_resp
+            mock_req_fn.return_value = mock_requests
+
+            with caplog.at_level("WARNING"):
+                assert get_token(force=True) is None
+
+            assert "Spotify-Token nicht erhältlich: 500 Server Error" in caplog.text
+
+    def test_get_token_invalid_schema_key_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("SPOTIFY_CLIENT_ID", "id")
+        monkeypatch.setenv("SPOTIFY_CLIENT_SECRET", "secret")
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"error": "invalid_grant"}
+
+        with patch("src.spotify_beats._requests") as mock_req_fn:
+            mock_requests = MagicMock()
+            mock_requests.post.return_value = mock_resp
+            mock_req_fn.return_value = mock_requests
+
+            with caplog.at_level("WARNING"):
+                assert get_token(force=True) is None
+
+            assert "Spotify-Token nicht erhältlich: 'access_token'" in caplog.text
 
 
 class TestAuthGet:
