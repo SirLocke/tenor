@@ -12,6 +12,7 @@ from src.metadata import (
     _collect_tags,
     dominant_place,
     parse_coordinates,
+    primary_place,
     probe_clip,
 )
 
@@ -142,3 +143,24 @@ def test_dominant_place():
         ClipInfo(path=Path("d.mp4"), place="Paris, France"),
     ]
     assert dominant_place(clips_tie_2) == "Paris, France"
+
+
+def test_primary_place():
+    """Test primary_place with None, empty strings, single locations, and edge cases."""
+    # None or empty/whitespace inputs
+    assert primary_place(None) is None
+    assert primary_place("") is None
+    assert primary_place("   ") is None
+
+    # Single location without comma
+    assert primary_place("Berlin") == "Berlin"
+    assert primary_place("  Berlin  ") == "Berlin"
+
+    # Multi-component location string
+    assert primary_place("São Roque, Funchal, Madeira, PT") == "São Roque"
+    assert primary_place("Paris, France") == "Paris"
+    assert primary_place("Tokyo, Japan") == "Tokyo"
+
+    # Edge cases with leading commas or empty first component
+    assert primary_place(", Madeira") is None
+    assert primary_place("  , Funchal") is None
