@@ -302,6 +302,7 @@ def test_size_stable_returns_false_when_unstable(tmp_path: Path) -> None:
     class FakeStat:
         def __init__(self, size: int):
             self.st_size = size
+            self.st_mtime = 0.0
 
     def mocked_get_stat(path: Path):
         idx = min(call_count[0], len(sizes) - 1)
