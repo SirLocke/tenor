@@ -383,6 +383,15 @@ def load_font(cfg: Mapping[str, Any], kind: str, size: int) -> ImageFont.FreeTyp
 # --------------------------------------------------------------------------- #
 # Typografie
 # --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class TextStyle:
+    """Typografie-Stil für Text-Rendering."""
+
+    font: ImageFont.FreeTypeFont
+    fill: Any
+    tracking: int = 0
+
+
 def _text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, tracking: int) -> float:
     if not text:
         return 0.0
@@ -394,21 +403,19 @@ def _draw_tracked(
     draw: ImageDraw.ImageDraw,
     xy: tuple[float, float],
     text: str,
-    font: ImageFont.FreeTypeFont,
-    fill: Any,
-    tracking: int,
+    style: TextStyle,
     anchor_right: float | None = None,
 ) -> float:
     """Zeichnet Text zeichenweise (für Letter-Spacing), rechtsbündig verankert."""
     if not text:
         return 0.0
-    widths = [draw.textlength(ch, font=font) for ch in text]
-    total = float(sum(widths) + tracking * max(len(text) - 1, 0))
+    widths = [draw.textlength(ch, font=style.font) for ch in text]
+    total = float(sum(widths) + style.tracking * max(len(text) - 1, 0))
     x = (anchor_right - total) if anchor_right is not None else xy[0]
     y = xy[1]
     for char, width in zip(text, widths):
-        draw.text((x, y), char, font=font, fill=fill, anchor="lt")
-        x += width + tracking
+        draw.text((x, y), char, font=style.font, fill=style.fill, anchor="lt")
+        x += width + style.tracking
     return total
 
 
@@ -589,9 +596,7 @@ def build_text_overlay(
                 shadow_draw,
                 (0, line_y + offset[1]),
                 line,
-                font,
-                shadow_fill,
-                tracking,
+                TextStyle(font=font, fill=shadow_fill, tracking=tracking),
                 anchor_right=anchor_x - offset[0],
             )
         if shadow_blur > 0:
@@ -602,7 +607,13 @@ def build_text_overlay(
     text_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
     text_draw = ImageDraw.Draw(text_layer)
     for line, font, color, tracking, line_y in placed:
-        _draw_tracked(text_draw, (0, line_y), line, font, color, tracking, anchor_right=anchor_x)
+        _draw_tracked(
+            text_draw,
+            (0, line_y),
+            line,
+            TextStyle(font=font, fill=color, tracking=tracking),
+            anchor_right=anchor_x,
+        )
     return Image.alpha_composite(image, text_layer)
 
 

@@ -4,9 +4,11 @@ sowie flexible Reel-Dauer und Schnitt-Pacing.
 
 from pathlib import Path
 
+from PIL import Image, ImageDraw, ImageFont
+
 from src.metadata import ClipInfo
 from src.pipeline import build_parser, build_segments
-from src.styling import GradeConfig, make_grader
+from src.styling import GradeConfig, TextStyle, _draw_tracked, make_grader
 
 
 class TestGradePresets:
@@ -140,6 +142,30 @@ class TestGradeConfigToneCurve:
         c_zero = grade.tone_curve(samples=0)
         assert c_zero.shape == (0,)
         assert c_zero.dtype == np.float32
+
+
+class TestTextStyleAndDrawTracked:
+    def test_draw_tracked_with_text_style(self) -> None:
+        font = ImageFont.load_default()
+        style = TextStyle(font=font, fill="#FFFFFF", tracking=2)
+        assert style.tracking == 2
+        assert style.fill == "#FFFFFF"
+        assert style.font == font
+
+        img = Image.new("RGBA", (200, 100), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+
+        # Draw empty text returns 0.0 width
+        width_empty = _draw_tracked(draw, (10.0, 10.0), "", style)
+        assert width_empty == 0.0
+
+        # Draw text without right anchor
+        width_normal = _draw_tracked(draw, (10.0, 10.0), "TEST", style)
+        assert width_normal > 0.0
+
+        # Draw text with right anchor
+        width_anchored = _draw_tracked(draw, (0.0, 10.0), "TEST", style, anchor_right=150.0)
+        assert width_anchored == width_normal
 
 
 class TestPacingAndDuration:
