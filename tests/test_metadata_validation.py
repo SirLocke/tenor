@@ -1,4 +1,5 @@
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -11,6 +12,7 @@ from src.metadata import (
     ClipInfo,
     _collect_tags,
     dominant_place,
+    embedded_datetime,
     parse_coordinates,
     probe_clip,
 )
@@ -142,3 +144,30 @@ def test_dominant_place():
         ClipInfo(path=Path("d.mp4"), place="Paris, France"),
     ]
     assert dominant_place(clips_tie_2) == "Paris, France"
+
+
+def test_embedded_datetime_timezone_handling():
+    """Test embedded_datetime with various ISO 8601 string variations and timezone handling."""
+    # Invalid or empty inputs
+    assert embedded_datetime(None) is None
+    assert embedded_datetime("") is None
+    assert embedded_datetime("   ") is None
+    assert embedded_datetime("no date here") is None
+
+    # Datetime with 'Z' UTC suffix
+    dt_z = embedded_datetime("2023-07-15T10:23:45Z")
+    assert dt_z == datetime(2023, 7, 15, 10, 23, 45, tzinfo=timezone.utc)
+
+    # Space separated date and time
+    dt_space = embedded_datetime("2023-07-15 10:23:45")
+    assert dt_space == datetime(2023, 7, 15, 10, 23, 45, tzinfo=timezone.utc)
+
+    # Embedded date inside location string (e.g. QuickTime location tag from iPhone)
+    geo_string_utc = "+53.4702-006.1153+023.5/2023-07-15T10:23:45Z/"
+    dt_geo = embedded_datetime(geo_string_utc)
+    assert dt_geo == datetime(2023, 7, 15, 10, 23, 45, tzinfo=timezone.utc)
+
+    # Embedded date with timezone offset in location string
+    geo_string_offset = "+53.4702-006.1153+023.5/2023-07-15T10:23:45+02:00/"
+    dt_geo_offset = embedded_datetime(geo_string_offset)
+    assert dt_geo_offset == datetime(2023, 7, 15, 10, 23, 45, tzinfo=timezone.utc)
