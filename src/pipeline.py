@@ -1721,12 +1721,12 @@ def export_reel(
     """
     video_cfg = get(cfg, "video", {}) or {}
 
+    out_dir = build_output_dir(base_out, cfg, title, when, day)
+    if not dry_run:
+        out_dir = ensure_dir(out_dir)
+    log.info("Ausgabeordner: %s", out_dir)
+
     if dry_run:
-        # Nichts anlegen, nichts löschen - nur den Zielpfad vorhersagen.
-        out_dir = build_output_dir(base_out, cfg, title, when, day)
-        stem = build_output_name(cfg, title, when, day)
-        suffix = str(get(cfg, "naming.extension", ".mp4") or ".mp4")
-        log.info("Ausgabeordner: %s", out_dir)
         for segment in segments:
             log.info(
                 "PLAN %s %.2f-%.2fs (%.2fs)",
@@ -1735,10 +1735,6 @@ def export_reel(
                 segment.end,
                 segment.duration,
             )
-        return out_dir / f"{stem}{suffix}"
-
-    out_dir = ensure_dir(build_output_dir(base_out, cfg, title, when, day))
-    log.info("Ausgabeordner: %s", out_dir)
 
     stem = build_output_name(cfg, title, when, day)
     suffix = str(get(cfg, "naming.extension", ".mp4") or ".mp4")
@@ -1746,7 +1742,8 @@ def export_reel(
     # Staging-Datei trägt dieselbe Endung wie das Ziel, sonst räumt
     # cleanup_partials() sie nicht mehr auf.
     partial = target.parent / f"{target.stem}.part{suffix}"
-    partial.unlink(missing_ok=True)
+    if not dry_run:
+        partial.unlink(missing_ok=True)
 
     try:
         overlay = make_overlay_array(cfg, title, subtitle, geo_tag)
@@ -1830,7 +1827,16 @@ def export_reel(
             write_kwargs["audio_fps"] = int(video_cfg.get("audio_sample_rate", 44100))
             write_kwargs["audio_nbytes"] = int(video_cfg.get("audio_nbytes", 2))
 
-        final.write_videofile(str(partial), **write_kwargs)
+        if dry_run:
+            log.info("DRY-RUN: Rendere Video-Frames ohne Export")
+            for _ in final.iter_frames(fps=write_kwargs["fps"], dtype="uint8"):
+                pass
+            if write_kwargs["audio"] and getattr(final, "audio", None) is not None:
+                log.info("DRY-RUN: Rendere Audio-Frames ohne Export")
+                for _ in final.audio.iter_chunks(fps=write_kwargs["audio_fps"]):
+                    pass
+        else:
+            final.write_videofile(str(partial), **write_kwargs)
 
     try:
         _attempt_export(bool(video_cfg.get("lossless")))
@@ -1860,13 +1866,17 @@ def export_reel(
         _close_all(getattr(final, "tenor_sources", []) or [])
         _close_all([getattr(final, "tenor_music_reader", None)])
 
-    partial.replace(target)
-    # Tatsächliche Dauer aus der fertigen Datei, nicht aus dem Plan: es
-    # können Cuts ausgefallen sein.
-    actual = probe_duration(target) or sum(s.duration for s in segments)
+    if not dry_run:
+        partial.replace(target)
+        # Tatsächliche Dauer aus der fertigen Datei, nicht aus dem Plan: es
+        # können Cuts ausgefallen sein.
+        actual = probe_duration(target) or sum(s.duration for s in segments)
+    else:
+        actual = sum(s.duration for s in segments)
+
     log.info("Export fertig: %s (%.1fs Video)", target, actual)
 
-    if (want_audio or music_mixed) and not has_audio_stream(target):
+    if not dry_run and (want_audio or music_mixed) and not has_audio_stream(target):
         if music_mixed:
             # Genau der Fall, den der Nutzer gemeldet hat: Musik war gewählt,
             # das Ergebnis war trotzdem stumm.
@@ -1882,7 +1892,7 @@ def export_reel(
                 target.name,
             )
 
-    if not no_cover and bool(video_cfg.get("cover", True)):
+    if not dry_run and not no_cover and bool(video_cfg.get("cover", True)):
         write_cover(
             target,
             target.with_suffix(".jpg"),
