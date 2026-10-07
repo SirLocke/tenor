@@ -199,6 +199,7 @@ DEFAULTS: dict[str, Any] = {
         "level": "INFO",
         "file": ".cache/tenor.log",
     },
+    "presets": {},
 }
 
 _ENV_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -299,11 +300,12 @@ def load_config(
     path: str | os.PathLike[str] | None = None,
     *,
     overrides: Mapping[str, Any] | None = None,
+    preset: str | None = None,
 ) -> dict[str, Any]:
     """Lädt die Konfiguration, merged sie mit den Defaults und substituiert ``${VAR}``.
 
-    Reihenfolge der Priorität (steigend): Defaults < config.yaml < explizite
-    ``overrides`` < ``TENOR_*``-Umgebungsvariablen.
+    Reihenfolge der Priorität (steigend): Defaults < config.yaml < Pipeline-Preset <
+    explizite ``overrides`` < ``TENOR_*``-Umgebungsvariablen.
     """
     config_path = find_config(path)
     raw: dict[str, Any] = {}
@@ -327,6 +329,14 @@ def load_config(
         )
 
     merged = _deep_merge(DEFAULTS, raw)
+
+    if preset:
+        presets = merged.get("presets", {})
+        if preset in presets:
+            merged = _deep_merge(merged, presets[preset])
+        else:
+            logging.getLogger(__name__).warning("Preset %r nicht gefunden in der Konfiguration.", preset)
+
     if overrides:
         merged = _deep_merge(merged, overrides)
     merged = _substitute(merged)

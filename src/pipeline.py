@@ -1429,6 +1429,7 @@ def run(
     sources: Sequence[str | Path],
     *,
     config_path: str | None = None,
+    preset: str | None = None,
     output_dir: str | Path | None = None,
     title: str | None = None,
     music: str | Path | None = None,
@@ -1450,7 +1451,7 @@ def run(
     Rohclips mit, ``False`` exportiert stumm, ``None`` folgt der Config. Die
     Musik wird in keinem Fall untergemischt.
     """
-    cfg = load_config(config_path)
+    cfg = load_config(config_path, preset=preset)
     # Overrides explizit durchreichen, damit der Watcher nicht darauf angewiesen
     # ist, dass die Datei auf der Platte schon die richtigen Werte enthält.
     if output_dir is not None:
@@ -1644,8 +1645,9 @@ def run(
         day_geo_tag = ""
         # Find the first clip in the day that has geo
         for segment in day_segments:
-            if segment.clip.has_geo and segment.clip.latitude is not None and segment.clip.longitude is not None:
-                day_geo_tag = format_coordinates(segment.clip.latitude, segment.clip.longitude)
+            clip = segment.clip
+            if clip.has_geo and clip.latitude is not None and clip.longitude is not None:
+                day_geo_tag = format_coordinates(clip.latitude, clip.longitude)
                 break
 
         target = export_reel(
@@ -1963,6 +1965,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("-c", "--config", help="Pfad zur config.yaml")
+    parser.add_argument("-p", "--preset", help="Name eines Pipeline-Presets aus config.yaml")
     parser.add_argument("--no-cover", action="store_true", help="kein Cover-Thumbnail erzeugen")
     parser.add_argument("--no-geo", action="store_true", help="Reverse-Geocoding überspringen")
     parser.add_argument("--limit", type=int, default=0, help="max. Anzahl Eingabedateien (0 = alle)")
@@ -2018,7 +2021,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        cfg = load_config(args.config)
+        cfg = load_config(args.config, preset=args.preset)
     except ConfigError as exc:
         print(f"Konfigurationsfehler: {exc}", file=sys.stderr)
         return 2
@@ -2034,6 +2037,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     result = run(
         args.input,
         config_path=args.config,
+        preset=args.preset,
         output_dir=args.output,
         title=args.title,
         music=args.music,
