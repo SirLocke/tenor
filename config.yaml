@@ -171,11 +171,14 @@ style:
     max_width: 780         # Textbreite links vom Ankerpunkt
     title_size: 36         # Roboto-Bold, Versalien
     subtitle_size: 24      # Roboto-Regular/Mono, #D0D5DD
+    geo_size: 16           # Roboto-Mono, #9CA3AF
     title_tracking: 3      # Letter-Spacing in px
     subtitle_tracking: 1
+    geo_tracking: 2
     line_gap: 16
     title_color: "#FFFFFF"
     subtitle_color: "#D0D5DD"
+    geo_color: "#9CA3AF"
     uppercase_title: true
     safe_bottom: 1540      # Textgruppe wandert nach oben, wenn sie überragt
     shadow_offset: [2, 2]

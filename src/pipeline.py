@@ -13,6 +13,7 @@ import json
 import logging
 import math
 import os
+import shlex
 import statistics
 import subprocess
 import sys
@@ -49,6 +50,7 @@ from .styling import (
     build_subtitle,
     build_text_overlay,
     center_crop_resize,
+    format_coordinates,
     make_grader,
     target_size,
 )
@@ -883,10 +885,12 @@ def mix_music(
         return None
 
 
-def make_overlay_array(cfg: Mapping[str, Any], title: str, subtitle: str) -> np.ndarray:
+def make_overlay_array(cfg: Mapping[str, Any], title: str, subtitle: str, geo_tag: str = "") -> np.ndarray:
     """Text-Overlay als RGBA-Numpy-Array für ``ImageClip``."""
     width, height = target_size(cfg)
-    image = build_text_overlay(cfg, title=title, subtitle=subtitle, width=width, height=height)
+    image = build_text_overlay(
+        cfg, title=title, subtitle=subtitle, geo_tag=geo_tag, width=width, height=height
+    )
     if image.mode != "RGBA":
         image = image.convert("RGBA")
     return np.asarray(image, dtype=np.uint8)
@@ -1440,6 +1444,7 @@ def run(
     pace: str | None = None,
     lossless: bool = False,
     audio: bool | None = None,
+    bpm: float | None = None,
 ) -> RenderResult:
     """Kompletter Pipeline-Lauf: Metadaten -> Schnitt -> Render -> Export.
 
@@ -1465,6 +1470,9 @@ def run(
     if grade is not None:
         cfg.setdefault("style", {})
         cfg["style"]["preset"] = str(grade).lower()
+    if bpm is not None:
+        cfg.setdefault("cut", {})
+        cfg["cut"]["fallback_bpm"] = float(bpm)
 
     video_cfg = get(cfg, "video", {}) or {}
     cut_cfg = dict(get(cfg, "cut", {}) or {})
@@ -1529,6 +1537,7 @@ def run(
     trip = trip_from_path([str(c.path) for c in usable], sources, get(cfg, "ingest_dir"))
     effective_title = title or trip or primary_place(place) or reference.date_label or "Tenor"
     subtitle = build_subtitle(place, reference.date_label)
+
     result.title = effective_title
     result.trip = trip
     result.subtitle = subtitle
@@ -1634,12 +1643,20 @@ def run(
         day_title = title or trip or primary_place(day_place) or day
         day_subtitle = build_subtitle(day_place, day)
 
+        day_geo_tag = ""
+        # Find the first clip in the day that has geo
+        for segment in day_segments:
+            if segment.clip.has_geo and segment.clip.latitude is not None and segment.clip.longitude is not None:
+                day_geo_tag = format_coordinates(segment.clip.latitude, segment.clip.longitude)
+                break
+
         target = export_reel(
             day_segments,
             cfg,
             base_out,
             title=day_title,
             subtitle=day_subtitle,
+            geo_tag=day_geo_tag,
             day=day,
             grade=grade_obj,
             when=now,
@@ -1691,6 +1708,7 @@ def export_reel(
     *,
     title: str,
     subtitle: str,
+    geo_tag: str = "",
     day: str,
     grade: GradeConfig,
     when: float,
@@ -1706,12 +1724,12 @@ def export_reel(
     """
     video_cfg = get(cfg, "video", {}) or {}
 
+    out_dir = build_output_dir(base_out, cfg, title, when, day)
+    if not dry_run:
+        out_dir = ensure_dir(out_dir)
+    log.info("Ausgabeordner: %s", out_dir)
+
     if dry_run:
-        # Nichts anlegen, nichts löschen - nur den Zielpfad vorhersagen.
-        out_dir = build_output_dir(base_out, cfg, title, when, day)
-        stem = build_output_name(cfg, title, when, day)
-        suffix = str(get(cfg, "naming.extension", ".mp4") or ".mp4")
-        log.info("Ausgabeordner: %s", out_dir)
         for segment in segments:
             log.info(
                 "PLAN %s %.2f-%.2fs (%.2fs)",
@@ -1720,10 +1738,6 @@ def export_reel(
                 segment.end,
                 segment.duration,
             )
-        return out_dir / f"{stem}{suffix}"
-
-    out_dir = ensure_dir(build_output_dir(base_out, cfg, title, when, day))
-    log.info("Ausgabeordner: %s", out_dir)
 
     stem = build_output_name(cfg, title, when, day)
     suffix = str(get(cfg, "naming.extension", ".mp4") or ".mp4")
@@ -1731,10 +1745,11 @@ def export_reel(
     # Staging-Datei trägt dieselbe Endung wie das Ziel, sonst räumt
     # cleanup_partials() sie nicht mehr auf.
     partial = target.parent / f"{target.stem}.part{suffix}"
-    partial.unlink(missing_ok=True)
+    if not dry_run:
+        partial.unlink(missing_ok=True)
 
     try:
-        overlay = make_overlay_array(cfg, title, subtitle)
+        overlay = make_overlay_array(cfg, title, subtitle, geo_tag)
     except Exception as exc:
         log.error("Text-Overlay konnte nicht gerendert werden (%s) - exportiere ohne Text", exc)
         overlay = None
@@ -1815,7 +1830,16 @@ def export_reel(
             write_kwargs["audio_fps"] = int(video_cfg.get("audio_sample_rate", 44100))
             write_kwargs["audio_nbytes"] = int(video_cfg.get("audio_nbytes", 2))
 
-        final.write_videofile(str(partial), **write_kwargs)
+        if dry_run:
+            log.info("DRY-RUN: Rendere Video-Frames ohne Export")
+            for _ in final.iter_frames(fps=write_kwargs["fps"], dtype="uint8"):
+                pass
+            if write_kwargs["audio"] and getattr(final, "audio", None) is not None:
+                log.info("DRY-RUN: Rendere Audio-Frames ohne Export")
+                for _ in final.audio.iter_chunks(fps=write_kwargs["audio_fps"]):
+                    pass
+        else:
+            final.write_videofile(str(partial), **write_kwargs)
 
     try:
         _attempt_export(bool(video_cfg.get("lossless")))
@@ -1845,13 +1869,17 @@ def export_reel(
         _close_all(getattr(final, "tenor_sources", []) or [])
         _close_all([getattr(final, "tenor_music_reader", None)])
 
-    partial.replace(target)
-    # Tatsächliche Dauer aus der fertigen Datei, nicht aus dem Plan: es
-    # können Cuts ausgefallen sein.
-    actual = probe_duration(target) or sum(s.duration for s in segments)
+    if not dry_run:
+        partial.replace(target)
+        # Tatsächliche Dauer aus der fertigen Datei, nicht aus dem Plan: es
+        # können Cuts ausgefallen sein.
+        actual = probe_duration(target) or sum(s.duration for s in segments)
+    else:
+        actual = sum(s.duration for s in segments)
+
     log.info("Export fertig: %s (%.1fs Video)", target, actual)
 
-    if (want_audio or music_mixed) and not has_audio_stream(target):
+    if not dry_run and (want_audio or music_mixed) and not has_audio_stream(target):
         if music_mixed:
             # Genau der Fall, den der Nutzer gemeldet hat: Musik war gewählt,
             # das Ergebnis war trotzdem stumm.
@@ -1867,7 +1895,7 @@ def export_reel(
                 target.name,
             )
 
-    if not no_cover and bool(video_cfg.get("cover", True)):
+    if not dry_run and not no_cover and bool(video_cfg.get("cover", True)):
         write_cover(
             target,
             target.with_suffix(".jpg"),
@@ -1889,16 +1917,22 @@ def scan_nextcloud(cfg: Mapping[str, Any], output_dir: Path) -> None:
     if not nc_cfg.get("enabled", False):
         return
     cmd_template = nc_cfg.get("scan_cmd")
-    if not cmd_template:
+    if not cmd_template or not isinstance(cmd_template, str):
         return
-    # Platzhalter {output_dir} ersetzen
-    cmd = cmd_template.format(output_dir=output_dir)
+    try:
+        cmd_tokens = shlex.split(cmd_template)
+    except ValueError as exc:
+        log.warning("Nextcloud-Scan Befehl ungültig: %s", exc)
+        return
+    if not cmd_tokens:
+        return
+    cmd = [tok.format(output_dir=output_dir) for tok in cmd_tokens]
     timeout = int(nc_cfg.get("timeout", 30) or 0)
-    log.info("Nextcloud-Scan: %s", cmd)
+    log.info("Nextcloud-Scan: %s", " ".join(cmd))
     try:
         subprocess.run(
             cmd,
-            shell=True,
+            shell=False,
             timeout=timeout,
             check=False,
             capture_output=True,
@@ -1953,6 +1987,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["fast", "medium", "slow"],
         default=None,
         help="Schnitt-Tempo (fast = ~1.5s, medium = ~2.3s, slow = ~3.2s)",
+    )
+    parser.add_argument(
+        "--bpm",
+        type=float,
+        default=None,
+        help="Expliziter BPM-Wert (überschreibt cut.fallback_bpm)",
     )
     audio_group = parser.add_mutually_exclusive_group()
     audio_group.add_argument(
@@ -2009,6 +2049,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         pace=args.pace,
         lossless=args.lossless,
         audio=args.audio,
+        bpm=args.bpm,
     )
 
     if args.json:

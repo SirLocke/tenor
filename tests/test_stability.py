@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from watchdog.events import FileSystemEvent
@@ -302,6 +302,7 @@ def test_size_stable_returns_false_when_unstable(tmp_path: Path) -> None:
     class FakeStat:
         def __init__(self, size: int):
             self.st_size = size
+            self.st_mtime = 0.0
 
     def mocked_get_stat(path: Path):
         idx = min(call_count[0], len(sizes) - 1)
@@ -1144,9 +1145,6 @@ def test_detect_beat_durations_median_calculation(tmp_path: Path) -> None:
     assert all(1.4 <= d <= 2.0 for d in durations)
 
 
-from unittest.mock import Mock
-
-
 @patch("src.spotify_beats.get_token")
 @patch("src.spotify_beats._requests")
 @patch("src.spotify_beats.time.sleep")
@@ -1267,3 +1265,53 @@ def test_unique_path_different_suffixes(tmp_path: Path) -> None:
     (tmp_path / "folder").touch()
     res_no_ext = unique_path(tmp_path, "folder", "")
     assert res_no_ext == tmp_path / "folder_2"
+
+def test_dry_run_renders_without_writing(tmp_path: Path) -> None:
+    from src.pipeline import export_reel, Segment, ClipInfo
+    from src.styling import GradeConfig
+    from unittest.mock import patch, MagicMock
+
+    cfg = {"naming": {"folder_template": ""}, "video": {"audio": True}}
+    base_out = tmp_path / "output"
+
+    # Fake segment
+    clip_path = tmp_path / "fake.mp4"
+    clip_path.write_bytes(b"dummy")
+    clip = ClipInfo(path=clip_path, duration=5.0)
+    seg = Segment(clip=clip, start=0.0, end=2.0)
+
+    grade = GradeConfig()
+
+    # We mock render_segments so we don't need real video input
+    with patch("src.pipeline.render_segments") as mock_render:
+        mock_final = MagicMock()
+        mock_final.duration = 2.0
+        mock_audio = MagicMock()
+        mock_final.audio = mock_audio
+        mock_render.return_value = [mock_final]
+
+        target = export_reel(
+            segments=[seg],
+            cfg=cfg,
+            base_out=base_out,
+            title="DryRunTest",
+            subtitle="Subtitle",
+            day="2026-09-11",
+            grade=grade,
+            when=1600000000.0,
+            dry_run=True,
+            errors_seen=[],
+        )
+
+        # In dry run mode, iter_frames should be called to force the pipeline to evaluate
+        mock_final.iter_frames.assert_called_once()
+
+        # And audio chunks should be evaluated too
+        mock_audio.iter_chunks.assert_called_once()
+
+        # But nothing should be written
+        mock_final.write_videofile.assert_not_called()
+
+        # Output directory should NOT exist (since folder_template is "" it won't create subdirs anyway, but base_out should not be created if it wasn't)
+        assert target is not None
+        assert not target.exists()

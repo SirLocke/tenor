@@ -13,13 +13,14 @@ rechtsbündig verankert - ohne Box, mit weichem Drop-Shadow.
 
 from __future__ import annotations
 
-import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from logging import getLogger
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -316,8 +317,8 @@ def _download_font(url: str, target: Path) -> bool:
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(target.suffix + ".part")
     try:
-        request = urllib.request.Request(url, headers={"User-Agent": "tenor/1.0"})
-        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310 - feste Mirror-URLs
+        request = Request(url, headers={"User-Agent": "tenor/1.0"})
+        with urlopen(request, timeout=20) as response:  # noqa: S310 - feste Mirror-URLs
             payload = response.read()
         if len(payload) < 4096:
             log.warning("Font-Download zu klein, wird verworfen: %s", url)
@@ -326,7 +327,7 @@ def _download_font(url: str, target: Path) -> bool:
         tmp.replace(target)
         log.info("Font geladen: %s", target)
         return True
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+    except (URLError, OSError, ValueError) as exc:
         log.debug("Font-Download fehlgeschlagen (%s): %s", url, exc)
         tmp.unlink(missing_ok=True)
         return False
@@ -460,11 +461,19 @@ def _line_height(font: ImageFont.FreeTypeFont) -> float:
     return float(bbox[3] - bbox[1])
 
 
+def format_coordinates(lat: float, lon: float) -> str:
+    """Formatiert Koordinaten (z.B. 53.5510° N, 9.9930° E)."""
+    lat_dir = "N" if lat >= 0 else "S"
+    lon_dir = "E" if lon >= 0 else "W"
+    return f"{abs(lat):.4f}° {lat_dir}, {abs(lon):.4f}° {lon_dir}"
+
+
 def build_text_overlay(
     cfg: Mapping[str, Any],
     *,
     title: str,
     subtitle: str = "",
+    geo_tag: str = "",
     width: int | None = None,
     height: int | None = None,
 ) -> Image.Image:
@@ -495,10 +504,14 @@ def build_text_overlay(
         title_text = title_text.upper()
     subtitle_text = (subtitle or "").strip()
 
+    geo_tag_text = (geo_tag or "").strip()
+
     title_font = load_font(cfg, "bold", int(text_cfg.get("title_size", 36)))
     subtitle_font = load_font(cfg, "regular", int(text_cfg.get("subtitle_size", 24)))
+    geo_font = load_font(cfg, "mono", int(text_cfg.get("geo_size", 16)))
     title_tracking = int(text_cfg.get("title_tracking", 3))
     subtitle_tracking = int(text_cfg.get("subtitle_tracking", 1))
+    geo_tracking = int(text_cfg.get("geo_tracking", 2))
 
     measure = ImageDraw.Draw(image)
     title_lines = wrap_text(measure, title_text, title_font, title_tracking, max_width) if title_text else []
@@ -507,7 +520,12 @@ def build_text_overlay(
         if subtitle_text
         else []
     )
-    if not title_lines and not subtitle_lines:
+    geo_lines = (
+        wrap_text(measure, geo_tag_text, geo_font, geo_tracking, max_width, max_lines=1)
+        if geo_tag_text
+        else []
+    )
+    if not title_lines and not subtitle_lines and not geo_lines:
         return image
 
     # (Zeilen, Font, Farbe, Tracking, Zeilenhöhe)
@@ -530,6 +548,16 @@ def build_text_overlay(
                 str(text_cfg.get("subtitle_color", "#D0D5DD")),
                 subtitle_tracking,
                 _line_height(subtitle_font),
+            )
+        )
+    if geo_lines:
+        blocks.append(
+            (
+                geo_lines,
+                geo_font,
+                str(text_cfg.get("geo_color", "#9CA3AF")),
+                geo_tracking,
+                _line_height(geo_font),
             )
         )
 
