@@ -984,7 +984,8 @@ def trip_from_path(
         for root in roots:
             try:
                 relative = resolved.relative_to(root)
-            except ValueError:
+            except ValueError as exc:
+                log.error("Pfad %s ist nicht relativ zu Ingest-Wurzel %s: %s", resolved, root, exc)
                 continue
             # Direkt im Ingest-Ordner -> kein Trip-Unterordner.
             if len(relative.parts) >= 2:
