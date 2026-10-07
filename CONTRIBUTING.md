@@ -41,7 +41,7 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.12+
 - ffmpeg (system package)
 - Git
 
@@ -136,7 +136,7 @@ We use **Ruff** for linting and formatting, **MyPy** for type checking.
 
 All settings are in `pyproject.toml`:
 - Line length: 110
-- Target: Python 3.11+
+- Target: Python 3.12+
 - Double quotes
 - Import sorting (isort via Ruff)
 
