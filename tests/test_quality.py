@@ -260,7 +260,7 @@ class TestBuildSegmentsPositions:
             segments = build_segments(clips, {"target_min": 1.4}, {}, durations=[1.5])
             previous = -1.0
             for segment in segments:
-                assert 0.0 <= segment.start
+                assert segment.start >= 0.0
                 assert segment.end <= duration + 1e-6
                 assert segment.start >= previous - 1e-6, (duration, segment)
                 previous = segment.end
@@ -753,6 +753,7 @@ class TestWindowPlan:
 
     def test_length_never_negative(self) -> None:
         assert WindowPlan(2.5, 1.0).length == 0.0
+
 
 def test_quality_config_validation() -> None:
     with pytest.raises(ValueError, match="min_sharpness darf nicht negativ sein"):

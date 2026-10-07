@@ -39,10 +39,10 @@ from .quality import (
     QualityConfig,
     analyse_clips,
     clamp_start,
+    find_highlights,
     plan_edge,
     plan_windows,
     spread_windows,
-    find_highlights,
 )
 from .styling import (
     GradeConfig,
@@ -443,8 +443,9 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
     aus, weil die Reels stumm exportiert werden - der Ton eines Rohclips wird
     nur mit ``video.audio: true`` mitgenommen.
     """
-    import tempfile
     import subprocess
+    import tempfile
+
     from moviepy import VideoFileClip
 
     def _validated(clip: Any) -> Any:
@@ -613,6 +614,7 @@ def render_segments(
     """
     import threading
     from concurrent.futures import ThreadPoolExecutor
+
     from moviepy import concatenate_videoclips
 
     video_cfg = get(cfg, "video", {}) or {}

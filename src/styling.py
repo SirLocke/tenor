@@ -582,4 +582,3 @@ def build_subtitle(place: str | None, date_label: str) -> str:
     """Zeile 2: Ort + Datum, jeweils optional."""
     parts = [p for p in (place, date_label) if p]
     return "  ·  ".join(parts)
-

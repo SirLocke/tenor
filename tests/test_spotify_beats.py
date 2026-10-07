@@ -6,7 +6,6 @@ import time
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from src.spotify_beats import (
     SpotifyAccessError,
     _auth_get,

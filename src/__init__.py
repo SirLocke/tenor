@@ -11,11 +11,11 @@ Fachmodule liegen in:
 
 from __future__ import annotations
 
-from copy import deepcopy
 import logging
 import os
 import re
 from collections.abc import Iterable, Mapping
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 

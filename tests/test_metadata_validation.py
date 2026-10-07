@@ -6,7 +6,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from unittest.mock import patch
 
 from pytest import approx
-
 from src.metadata import (
     ClipInfo,
     _collect_tags,

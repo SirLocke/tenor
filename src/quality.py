@@ -131,7 +131,7 @@ class QualityConfig:
             raise ValueError(f"duplicate_threshold darf nicht negativ sein (ist {self.duplicate_threshold})")
 
     @classmethod
-    def from_config(cls, cfg: Any) -> "QualityConfig":
+    def from_config(cls, cfg: Any) -> QualityConfig:
         raw = cfg if isinstance(cfg, dict) else {}
 
         def number(key: str, fallback: float) -> float:

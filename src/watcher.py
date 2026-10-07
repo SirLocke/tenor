@@ -238,7 +238,7 @@ class WatcherState:
                     self.processed.pop(stale[0], None)
 
 
-def _restore_backup(path: Path) -> "WatcherState | None":
+def _restore_backup(path: Path) -> WatcherState | None:
     """Lädt die ``.bak``-Fassung, falls die Hauptdatei unlesbar ist."""
     backup = path.with_suffix(".bak")
     if not backup.is_file():

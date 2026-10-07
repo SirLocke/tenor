@@ -13,7 +13,7 @@ import subprocess
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -113,7 +113,7 @@ class ClipInfo:
 
     def _mtime(self) -> datetime | None:
         try:
-            return datetime.fromtimestamp(self.path.stat().st_mtime, tz=timezone.utc)
+            return datetime.fromtimestamp(self.path.stat().st_mtime, tz=UTC)
         except OSError:
             return None
 
@@ -245,7 +245,7 @@ def _parse_datetime(value: str | None) -> datetime | None:
             log.debug("Unbekannter Zeitstempel: %r", text)
             return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed
 
 

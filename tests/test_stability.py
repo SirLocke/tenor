@@ -14,9 +14,9 @@ import sys
 import threading
 import time
 from pathlib import Path
-from unittest.mock import patch
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from watchdog.events import FileSystemEvent
@@ -497,7 +497,7 @@ def test_build_segment_clip_never_exceeds_source_duration() -> None:
         def __init__(self) -> None:
             self.requests: list[tuple[float, float]] = []
 
-        def subclipped(self, start: float, end: float) -> "_FakePiece":
+        def subclipped(self, start: float, end: float) -> _FakePiece:
             self.requests.append((start, end))
             return _FakePiece(self, start, end)
 
@@ -508,14 +508,14 @@ def test_build_segment_clip_never_exceeds_source_duration() -> None:
             self.end = end
             self.duration = max(end - start, 1 / 30)
 
-        def with_duration(self, value: float) -> "_FakePiece":
+        def with_duration(self, value: float) -> _FakePiece:
             self.duration = value
             return self
 
-        def with_fps(self, _fps: int) -> "_FakePiece":
+        def with_fps(self, _fps: int) -> _FakePiece:
             return self
 
-        def image_transform(self, _fn: Any) -> "_FakePiece":
+        def image_transform(self, _fn: Any) -> _FakePiece:
             return self
 
     fake = _FakeSource()
@@ -1123,6 +1123,7 @@ def test_detect_beat_durations_median_calculation(tmp_path: Path) -> None:
     """Prüft, dass detect_beat_durations mit Mock-Librosa Median-Intervalle korrekt berechnet."""
     import sys
     from unittest.mock import MagicMock
+
     import numpy as np
     import src.pipeline as pipeline_module
 
@@ -1143,7 +1144,7 @@ def test_detect_beat_durations_median_calculation(tmp_path: Path) -> None:
     assert all(1.4 <= d <= 2.0 for d in durations)
 
 
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 
 @patch("src.spotify_beats.get_token")
