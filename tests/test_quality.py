@@ -180,17 +180,21 @@ class TestEdgeProtection:
             margin = plan_edge(0.25, duration, sum(lengths))
             starts = spread_windows(duration, lengths, 0.25)
             assert len(starts) == len(lengths)
-            for start, length in zip(starts, lengths):
+            for start, length in zip(starts, lengths, strict=False):
                 assert start >= margin - 1e-6, (duration, lengths, start, margin)
                 assert start + length <= duration - margin + 1e-6, (
-                    duration, lengths, start + length, margin,
+                    duration,
+                    lengths,
+                    start + length,
+                    margin,
                 )
 
     def test_find_highlights_fallback_keeps_the_margin(self) -> None:
         """Ohne verwertbare Analyse greift der Spread - mit demselben Rand."""
         # Zu kurz für die Highlight-Suche: der Fallback muss den Rand wahren.
-        starts = find_highlights(_analysis(duration=3.0, frames=12), 3.0, [1.5],
-                                 QualityConfig(enabled=True), 0.25)
+        starts = find_highlights(
+            _analysis(duration=3.0, frames=12), 3.0, [1.5], QualityConfig(enabled=True), 0.25
+        )
         assert starts[0] >= plan_edge(0.25, 3.0, 1.5) - 1e-6
 
     def test_clamp_start_holds_the_edge(self) -> None:
@@ -235,8 +239,9 @@ class TestEdgeProtection:
     def test_build_segments_keeps_every_cut_off_the_edges(self, duration: float) -> None:
         cfg = QualityConfig(enabled=True, edge_trim=0.25)
         clips = [ClipInfo(path=Path("x.mov"), duration=duration)]
-        segments = build_segments(clips, {"target_min": 1.4}, {},
-                                  durations=[1.5], quality_cfg=cfg, analyses={})
+        segments = build_segments(
+            clips, {"target_min": 1.4}, {}, durations=[1.5], quality_cfg=cfg, analyses={}
+        )
         assert segments
         total = sum(s.duration for s in segments)
         margin = plan_edge(0.25, duration, total)
@@ -246,9 +251,14 @@ class TestEdgeProtection:
     def test_disabled_gate_keeps_the_legacy_positions(self) -> None:
         """Ohne Gate bleibt die alte Verteilung inkl. Rand 0 s."""
         clips = [ClipInfo(path=Path("x.mov"), duration=3.0)]
-        segments = build_segments(clips, {"target_min": 1.4}, {},
-                                  durations=[1.5],
-                                  quality_cfg=QualityConfig(enabled=False), analyses={})
+        segments = build_segments(
+            clips,
+            {"target_min": 1.4},
+            {},
+            durations=[1.5],
+            quality_cfg=QualityConfig(enabled=False),
+            analyses={},
+        )
         assert segments
         assert segments[0].start == pytest.approx(0.75, abs=0.02)
 
@@ -383,7 +393,10 @@ class TestDuplicateGate:
         near = np.full(SIGNATURE_SIZE * SIGNATURE_SIZE, 97.0)
 
         plans, _ = plan_windows(
-            _analysis(signature=near), [(1.0, 2.5)], _cfg(), source_duration=10.0,
+            _analysis(signature=near),
+            [(1.0, 2.5)],
+            _cfg(),
+            source_duration=10.0,
             reference=[same],
         )
         assert len(plans) == 1
@@ -412,13 +425,19 @@ class TestDuplicateGate:
         )
         assert plans[0].kept
         plans, history = plan_windows(
-            _analysis("b.mov", signature=sig_b), [(1.0, 2.5)], cfg,
-            source_duration=10.0, reference=history,
+            _analysis("b.mov", signature=sig_b),
+            [(1.0, 2.5)],
+            cfg,
+            source_duration=10.0,
+            reference=history,
         )
         assert plans[0].kept
         plans, history = plan_windows(
-            _analysis("a2.mov", signature=sig_a), [(1.0, 2.5)], cfg,
-            source_duration=10.0, reference=history,
+            _analysis("a2.mov", signature=sig_a),
+            [(1.0, 2.5)],
+            cfg,
+            source_duration=10.0,
+            reference=history,
         )
         assert not plans[0].kept, "dieselbe Szene hätte fallen müssen"
 
@@ -432,12 +451,18 @@ class TestDuplicateGate:
             _analysis("a.mov", signature=sig_a), [(1.0, 2.5)], cfg, source_duration=10.0
         )
         _, history = plan_windows(
-            _analysis("b.mov", signature=sig_b), [(1.0, 2.5)], cfg,
-            source_duration=10.0, reference=history,
+            _analysis("b.mov", signature=sig_b),
+            [(1.0, 2.5)],
+            cfg,
+            source_duration=10.0,
+            reference=history,
         )
         plans, _ = plan_windows(
-            _analysis("a2.mov", signature=sig_a), [(1.0, 2.5)], cfg,
-            source_duration=10.0, reference=history,
+            _analysis("a2.mov", signature=sig_a),
+            [(1.0, 2.5)],
+            cfg,
+            source_duration=10.0,
+            reference=history,
         )
         assert not plans[0].kept
 
@@ -447,12 +472,18 @@ class TestDuplicateGate:
             _analysis("a.mov", signature=sig_a), [(1.0, 2.5)], narrow, source_duration=10.0
         )
         _, history = plan_windows(
-            _analysis("b.mov", signature=sig_b), [(1.0, 2.5)], narrow,
-            source_duration=10.0, reference=history,
+            _analysis("b.mov", signature=sig_b),
+            [(1.0, 2.5)],
+            narrow,
+            source_duration=10.0,
+            reference=history,
         )
         plans, _ = plan_windows(
-            _analysis("a2.mov", signature=sig_a), [(1.0, 2.5)], narrow,
-            source_duration=10.0, reference=history,
+            _analysis("a2.mov", signature=sig_a),
+            [(1.0, 2.5)],
+            narrow,
+            source_duration=10.0,
+            reference=history,
         )
         assert plans[0].kept
 
@@ -475,7 +506,7 @@ class TestDuplicateGate:
         threshold = QualityConfig().duplicate_threshold
         base = np.full(size, 100.0)
         near = base.copy()
-        near[: size // 4] += 10.0   # ein Viertel der Merkmale leicht anders
+        near[: size // 4] += 10.0  # ein Viertel der Merkmale leicht anders
         far = base.copy()
         far[: size // 4] += 120.0
         assert signature_distance(base, near) < signature_distance(base, far)
@@ -484,19 +515,21 @@ class TestDuplicateGate:
 
     def test_history_is_capped(self) -> None:
         cfg = _cfg(duplicate_memory=2)
-        distinct = [
-            np.full(SIGNATURE_SIZE * SIGNATURE_SIZE, float(v)) for v in (40, 90, 150, 210)
-        ]
+        distinct = [np.full(SIGNATURE_SIZE * SIGNATURE_SIZE, float(v)) for v in (40, 90, 150, 210)]
+        _, history = plan_windows(_analysis(signature=distinct[0]), [(1.0, 2.5)], cfg, source_duration=10.0)
         _, history = plan_windows(
-            _analysis(signature=distinct[0]), [(1.0, 2.5)], cfg, source_duration=10.0
+            _analysis(signature=distinct[1]),
+            [(1.0, 2.5)],
+            cfg,
+            source_duration=10.0,
+            reference=history,
         )
         _, history = plan_windows(
-            _analysis(signature=distinct[1]), [(1.0, 2.5)], cfg,
-            source_duration=10.0, reference=history,
-        )
-        _, history = plan_windows(
-            _analysis(signature=distinct[2]), [(1.0, 2.5)], cfg,
-            source_duration=10.0, reference=history,
+            _analysis(signature=distinct[2]),
+            [(1.0, 2.5)],
+            cfg,
+            source_duration=10.0,
+            reference=history,
         )
         assert len(history) == 2
 
@@ -509,13 +542,19 @@ class TestDuplicateGate:
             _analysis("a.mov", signature=sig_dup), [(1.0, 2.5)], cfg, source_duration=10.0
         )
         _, history = plan_windows(
-            _analysis("b.mov", signature=sig_dup), [(1.0, 2.5)], cfg,
-            source_duration=10.0, reference=history,
+            _analysis("b.mov", signature=sig_dup),
+            [(1.0, 2.5)],
+            cfg,
+            source_duration=10.0,
+            reference=history,
         )
         assert history
         plans, _ = plan_windows(
-            _analysis("c.mov", signature=sig_new), [(1.0, 2.5)], cfg,
-            source_duration=10.0, reference=history,
+            _analysis("c.mov", signature=sig_new),
+            [(1.0, 2.5)],
+            cfg,
+            source_duration=10.0,
+            reference=history,
         )
         assert plans[0].kept
 
@@ -530,7 +569,9 @@ class TestShifting:
         luma = np.full(40, 140.0, dtype=np.float32)
         luma[(times >= 1.0) & (times < 2.0)] = 2.0
         analysis = ClipAnalysis(
-            path=Path("x.mov"), duration=10.0, sample_fps=4.0,
+            path=Path("x.mov"),
+            duration=10.0,
+            sample_fps=4.0,
             sharpness=np.full(40, 12000.0, dtype=np.float32),
             luma=luma,
             black_ratio=np.full(40, 0.02, dtype=np.float32),
@@ -538,17 +579,13 @@ class TestShifting:
             signatures=np.zeros((40, SIGNATURE_SIZE * SIGNATURE_SIZE), dtype=np.float32),
         )
         assert not check_window(analysis, 1.0, 2.5, _cfg(min_luma=60.0)).ok
-        plans, _ = plan_windows(
-            analysis, [(1.0, 2.5)], _cfg(min_luma=60.0), source_duration=10.0
-        )
+        plans, _ = plan_windows(analysis, [(1.0, 2.5)], _cfg(min_luma=60.0), source_duration=10.0)
         assert plans[0].kept
         assert plans[0].start == pytest.approx(1.3, abs=0.01)
         assert plans[0].shifted == pytest.approx(0.3, abs=0.01)
 
     def test_shifting_never_leaves_the_source(self) -> None:
-        plans, _ = plan_windows(
-            _analysis(luma=2.0), [(1.0, 2.5)], _cfg(), source_duration=2.0
-        )
+        plans, _ = plan_windows(_analysis(luma=2.0), [(1.0, 2.5)], _cfg(), source_duration=2.0)
         assert plans[0].end <= 2.0 + 1e-6
 
     def test_imperfect_material_is_kept_by_default(self) -> None:
@@ -568,9 +605,7 @@ class TestShifting:
 # --------------------------------------------------------------------------- #
 class TestNeverLosesMaterial:
     def test_broken_analysis_keeps_every_window(self) -> None:
-        plans, history = plan_windows(
-            _broken(), [(1.0, 2.5), (4.0, 5.5)], _cfg(), source_duration=10.0
-        )
+        plans, history = plan_windows(_broken(), [(1.0, 2.5), (4.0, 5.5)], _cfg(), source_duration=10.0)
         assert [p.kept for p in plans] == [True, True]
         assert [(p.start, p.end) for p in plans] == [(1.0, 2.5), (4.0, 5.5)]
         assert history == []
@@ -581,8 +616,10 @@ class TestNeverLosesMaterial:
 
     def test_disabled_gate_keeps_every_window(self) -> None:
         plans, _ = plan_windows(
-            _analysis(luma=0.0, sharpness=0.0), [(1.0, 2.5)],
-            _cfg(enabled=False), source_duration=10.0,
+            _analysis(luma=0.0, sharpness=0.0),
+            [(1.0, 2.5)],
+            _cfg(enabled=False),
+            source_duration=10.0,
         )
         assert plans[0].kept and (plans[0].start, plans[0].end) == (1.0, 2.5)
 
@@ -591,8 +628,12 @@ class TestNeverLosesMaterial:
         clips = [ClipInfo(path=Path(f"c{i}.mov"), duration=4.0) for i in range(5)]
         plain = build_segments(clips, {"target_min": 1.4}, {}, durations=[1.5])
         gated = build_segments(
-            clips, {"target_min": 1.4}, {}, durations=[1.5],
-            quality_cfg=_cfg(), analyses={},
+            clips,
+            {"target_min": 1.4},
+            {},
+            durations=[1.5],
+            quality_cfg=_cfg(),
+            analyses={},
         )
         assert len(gated) == len(plain)
         assert sum(s.duration for s in gated) == sum(s.duration for s in plain)
@@ -600,8 +641,12 @@ class TestNeverLosesMaterial:
     def test_build_segments_uses_broken_analysis_without_dropping(self) -> None:
         clips = [ClipInfo(path=Path("a.mov"), duration=4.0)]
         gated = build_segments(
-            clips, {"target_min": 1.4}, {}, durations=[1.5],
-            quality_cfg=_cfg(), analyses={Path("a.mov"): _broken()},
+            clips,
+            {"target_min": 1.4},
+            {},
+            durations=[1.5],
+            quality_cfg=_cfg(),
+            analyses={Path("a.mov"): _broken()},
         )
         assert len(gated) == 1
 
@@ -622,21 +667,21 @@ class TestConfig:
         assert QualityConfig.from_config({}).enabled
 
     def test_visual_interest_metrics_are_parsed(self) -> None:
-        cfg = QualityConfig.from_config({
-            "min_motion": 5.5,
-            "min_faces": 1.0,
-            "min_color_variance": 12.3
-        })
+        cfg = QualityConfig.from_config({"min_motion": 5.5, "min_faces": 1.0, "min_color_variance": 12.3})
         assert cfg.min_motion == 5.5
         assert cfg.min_faces == 1.0
         assert cfg.min_color_variance == 12.3
 
     def test_garbage_values_do_not_crash(self) -> None:
-        cfg = QualityConfig.from_config(
-            {"search_offsets": ["x", None, 0.5, {}], "sample_fps": "nonsense",
-             "timeout": -1, "cache_dir": None, "min_luma": "dunkel",
-             "max_black_ratio": float("inf"), "duplicate_memory": 0}
-        )
+        cfg = QualityConfig.from_config({
+            "search_offsets": ["x", None, 0.5, {}],
+            "sample_fps": "nonsense",
+            "timeout": -1,
+            "cache_dir": None,
+            "min_luma": "dunkel",
+            "max_black_ratio": float("inf"),
+            "duplicate_memory": 0,
+        })
         assert cfg.search_offsets == (0.5,)
         assert cfg.sample_fps >= 0.5
         assert cfg.timeout >= 5.0
@@ -654,9 +699,7 @@ class TestConfig:
         assert cfg.search_offsets == QualityConfig.search_offsets
 
     def test_ratios_are_clamped(self) -> None:
-        cfg = QualityConfig.from_config(
-            {"max_black_ratio": 5.0, "max_white_ratio": -1.0, "max_luma": 999.0}
-        )
+        cfg = QualityConfig.from_config({"max_black_ratio": 5.0, "max_white_ratio": -1.0, "max_luma": 999.0})
         assert cfg.max_black_ratio == 1.0
         assert cfg.max_white_ratio == 0.0
         assert cfg.max_luma == 255.0
@@ -664,13 +707,15 @@ class TestConfig:
     def test_zero_disables(self) -> None:
         # Untergrenzen mit 0 sind aus; bei Anteilen ist 1,0 der ausgeschaltete
         # Wert (100 % schwarze Pixel kann es nicht geben).
-        cfg = QualityConfig.from_config(
-            {"min_sharpness": 0, "min_luma": 0, "max_luma": 255,
-             "max_black_ratio": 1.0, "max_white_ratio": 1.0, "duplicate_threshold": 0}
-        )
-        assert check_window(
-            _analysis(luma=0.0, sharpness=0.0, black=1.0, white=1.0), 1.0, 2.5, cfg
-        ).ok
+        cfg = QualityConfig.from_config({
+            "min_sharpness": 0,
+            "min_luma": 0,
+            "max_luma": 255,
+            "max_black_ratio": 1.0,
+            "max_white_ratio": 1.0,
+            "duplicate_threshold": 0,
+        })
+        assert check_window(_analysis(luma=0.0, sharpness=0.0, black=1.0, white=1.0), 1.0, 2.5, cfg).ok
 
 
 # --------------------------------------------------------------------------- #

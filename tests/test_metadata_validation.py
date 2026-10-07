@@ -29,13 +29,13 @@ def test_parse_coordinates_valid():
     assert lon == approx(45.25)
 
     # DMS format N / W
-    lat, lon = parse_coordinates('53°28\'12.7"N 6°06\'54.9"W')
+    lat, lon = parse_coordinates("53°28'12.7\"N 6°06'54.9\"W")
     assert lat is not None and lon is not None
     assert lat == approx(53 + 28 / 60 + 12.7 / 3600)
     assert lon == approx(-(6 + 6 / 60 + 54.9 / 3600))
 
     # DMS format S / E
-    lat, lon = parse_coordinates('12°30\'00"S 45°15\'00"E')
+    lat, lon = parse_coordinates("12°30'00\"S 45°15'00\"E")
     assert lat == approx(-(12 + 30 / 60))
     assert lon == approx(45 + 15 / 60)
 
@@ -61,7 +61,7 @@ def test_parse_coordinates_invalid():
     assert parse_coordinates("+00.0000-185.0000/") == (None, None)
 
     # DMS out of range
-    assert parse_coordinates('95°00\'00"N 10°00\'00"E') == (None, None)
+    assert parse_coordinates("95°00'00\"N 10°00'00\"E") == (None, None)
 
 
 def test_collect_tags_malformed():

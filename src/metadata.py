@@ -146,7 +146,8 @@ def ffprobe_json(path: str | Path) -> dict[str, Any] | None:
     if Path(path).suffix.lower() in RAW_VIDEO_SUFFIXES:
         cmd += ["-f", "hevc"]
     cmd += [
-        "-print_format", "json",
+        "-print_format",
+        "json",
         "-show_format",
         "-show_streams",
         str(path),
@@ -482,11 +483,16 @@ def probe_clip(path: str | Path) -> ClipInfo:
             if clip.duration == 0.0 and clip.fps > 0.0:
                 try:
                     count_cmd = [
-                        FFPROBE, "-v", "quiet",
-                        "-select_streams", "v:0",
+                        FFPROBE,
+                        "-v",
+                        "quiet",
+                        "-select_streams",
+                        "v:0",
                         "-count_frames",
-                        "-show_entries", "stream=nb_read_frames",
-                        "-of", "csv=p=0",
+                        "-show_entries",
+                        "stream=nb_read_frames",
+                        "-of",
+                        "csv=p=0",
                     ]
                     if Path(path).suffix.lower() in RAW_VIDEO_SUFFIXES:
                         count_cmd += ["-f", "hevc"]
@@ -632,7 +638,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         cfg = load_config(args.config)
     except ConfigError as exc:
-        print(f"Konfigurationsfehler: {exc}", file=sys.stderr)
+        print(f"Konfigurationsfehler: {exc}", file=sys.stderr)  # noqa: T201
         return 2
 
     setup_logging(cfg)
@@ -646,10 +652,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         geocoder.save_cache()
 
     if args.json:
-        print(json.dumps([c.to_dict() for c in clips], indent=2, ensure_ascii=False))
+        print(json.dumps([c.to_dict() for c in clips], indent=2, ensure_ascii=False))  # noqa: T201
     else:
         for clip in clips:
-            print(
+            print(  # noqa: T201
                 f"{clip.date_label or '----------'} {clip.time_label or '------'} | "
                 f"{clip.name} | {clip.duration:7.1f}s | "
                 f"{clip.place or (f'{clip.latitude:.4f},{clip.longitude:.4f}' if clip.has_geo else '-')} "

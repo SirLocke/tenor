@@ -9,6 +9,7 @@ CLI-Beispiel::
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import math
@@ -126,12 +127,12 @@ def detect_beat_durations(music: Path, cut_cfg: Mapping[str, Any]) -> list[float
         return []
 
     beats = [0.0] + [float(t) for t in np.asarray(times).ravel() if math.isfinite(float(t))]
-    beats = sorted(set(round(b, 4) for b in beats if b >= 0.0))
+    beats = sorted({round(b, 4) for b in beats if b >= 0.0})
     if len(beats) < 3:
         log.warning("Zu wenige Beats in %s (%d) - Fallback greift", music.name, len(beats))
         return []
 
-    intervals = [b - a for a, b in zip(beats, beats[1:]) if b - a > 0.05]
+    intervals = [b - a for a, b in zip(beats, beats[1:], strict=False) if b - a > 0.05]
     if not intervals:
         return []
     median_beat = float(statistics.median(intervals))
@@ -146,7 +147,7 @@ def detect_beat_durations(music: Path, cut_cfg: Mapping[str, Any]) -> list[float
 
     grid = beats[::group]
     durations: list[float] = []
-    for start, end in zip(grid, grid[1:]):
+    for start, end in zip(grid, grid[1:], strict=False):
         span = end - start
         if span <= 0:
             continue
@@ -282,10 +283,7 @@ def build_segments(
     history: list[np.ndarray] = []
     kept_total = dropped_total = shifted_total = 0
 
-    valid_clips = [
-        c for c in clips
-        if c.duration > 0.0 and c.duration >= max(min_source_duration, t_min)
-    ]
+    valid_clips = [c for c in clips if c.duration > 0.0 and c.duration >= max(min_source_duration, t_min)]
 
     for idx, clip in enumerate(valid_clips):
         source_duration = clip.duration
@@ -329,7 +327,7 @@ def build_segments(
             starts = spread_windows(source_duration, wanted, edge)
 
         windows = []
-        for start, length in zip(starts, wanted):
+        for start, length in zip(starts, wanted, strict=False):
             start = clamp_start(start, length, source_duration, edge)
             windows.append((start, start + length))
 
@@ -355,9 +353,7 @@ def build_segments(
                 continue
             if max_total and total + plan.length > max_total:
                 break
-            segments.append(
-                Segment(clip=clip, start=round(plan.start, 3), end=round(plan.end, 3))
-            )
+            segments.append(Segment(clip=clip, start=round(plan.start, 3), end=round(plan.end, 3)))
             total += plan.length
             used_in_clip += plan.length
             cuts_from_clip += 1
@@ -371,9 +367,7 @@ def build_segments(
             cuts_from_clip,
             used_in_clip,
             source_duration,
-            f" ({100.0 * used_in_clip / planned_seconds:.0f}% der Planung)"
-            if planned_seconds > 0
-            else "",
+            f" ({100.0 * used_in_clip / planned_seconds:.0f}% der Planung)" if planned_seconds > 0 else "",
         )
 
     if gate is not None and (kept_total or dropped_total or shifted_total):
@@ -400,9 +394,16 @@ def has_audio_stream(path: Path) -> bool:
     try:
         result = subprocess.run(
             [
-                "ffprobe", "-v", "error", "-select_streams", "a:0",
-                "-show_entries", "stream=codec_type",
-                "-of", "csv=p=0", str(path),
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=codec_type",
+                "-of",
+                "csv=p=0",
+                str(path),
             ],
             capture_output=True,
             timeout=15,
@@ -421,9 +422,16 @@ def probe_duration(path: Path) -> float | None:
     try:
         result = subprocess.run(
             [
-                "ffprobe", "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "format=duration",
-                "-of", "default=nw=1:nk=1", str(path),
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=nw=1:nk=1",
+                str(path),
             ],
             capture_output=True,
             timeout=15,
@@ -459,9 +467,16 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
 
     # Prüfen ob 10-Bit-HEVC -> dann nach 8-Bit transkodieren
     probe_cmd = [
-        "ffprobe", "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream=pix_fmt,codec_name",
-        "-of", "csv=p=0", str(path)
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=pix_fmt,codec_name",
+        "-of",
+        "csv=p=0",
+        str(path),
     ]
     tmp_path: Path | None = None
     try:
@@ -472,10 +487,20 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
             with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
                 tmp_path = Path(tmp.name)
             transcode_cmd = [
-                "ffmpeg", "-v", "error", "-y",
-                "-i", str(path),
-                "-pix_fmt", "yuv420p",
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
+                "ffmpeg",
+                "-v",
+                "error",
+                "-y",
+                "-i",
+                str(path),
+                "-pix_fmt",
+                "yuv420p",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "22",
             ]
             if with_audio:
                 # Ton nur mitnehmen, wenn er danach wirklich gebraucht wird.
@@ -514,10 +539,8 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
         return _validated(clip)
     except Exception:
         # Reader (und damit der ffmpeg-Kindprozess) ist schon offen.
-        try:
+        with contextlib.suppress(Exception):  # pragma: no cover
             clip.close()
-        except Exception:  # pragma: no cover
-            pass
         raise
 
 
@@ -583,9 +606,7 @@ def build_segment_clip(
 
     if source_audio is not None:
         try:
-            piece = piece.with_audio(
-                source_audio.subclipped(start, end).with_duration(piece.duration)
-            )
+            piece = piece.with_audio(source_audio.subclipped(start, end).with_duration(piece.duration))
         except Exception as exc:
             log.warning(
                 "Ton von %s nicht übernehmbar (%.2f-%.2fs): %s",
@@ -700,14 +721,11 @@ def render_segments(
     if not with_audio:
         # Ohne Tonwunsch wird die Spur abgeworfen, damit der Export nicht
         # versehentlich eine mitgeschleppte Tonspur enthält.
-        try:
+        with contextlib.suppress(Exception):  # pragma: no cover
             final = final.without_audio()
-        except Exception:  # pragma: no cover
-            pass
     elif getattr(final, "audio", None) is None:
         log.warning(
-            "Kein einziger Cut hatte eine Tonspur - der Export bleibt stumm "
-            "(rohvideo.audio_codec=%s)",
+            "Kein einziger Cut hatte eine Tonspur - der Export bleibt stumm (rohvideo.audio_codec=%s)",
             get(cfg, "video.audio_codec", "aac"),
         )
     # Quell-Reader leben bis nach write_videofile weiter
@@ -732,10 +750,8 @@ def _close_all(clips: Sequence[Any]) -> None:
     for clip in clips:
         if clip is None:
             continue
-        try:
+        with contextlib.suppress(Exception):  # pragma: no cover
             clip.close()
-        except Exception:  # pragma: no cover
-            pass
 
 
 def _match_audio_channels(clip: Any, nchannels: int) -> Any:
@@ -865,8 +881,7 @@ def mix_music(
             mixed = mixed.with_effects([AudioFadeOut(fade_out)])
 
         log.info(
-            "Musik %r gemischt (Originalton bei %.0f%%, Musik bei %.0f%%, "
-            "%d Kanal/%d Hz, Ausblende %.1fs)",
+            "Musik %r gemischt (Originalton bei %.0f%%, Musik bei %.0f%%, %d Kanal/%d Hz, Ausblende %.1fs)",
             path.name,
             original_gain * 100.0 if original is not None else 0.0,
             music_gain * 100.0,
@@ -909,12 +924,20 @@ def write_cover(
 ) -> Path | None:
     """Erzeugt ein 1080x1920 Cover-Frame bei Sekunde ``at`` (via ffmpeg)."""
     cmd = [
-        "ffmpeg", "-y", "-v", "error",
-        "-ss", f"{max(at, 0.0):.3f}",
-        "-i", str(video),
-        "-frames:v", "1",
-        "-vf", f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}",
-        "-q:v", "2",
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-ss",
+        f"{max(at, 0.0):.3f}",
+        "-i",
+        str(video),
+        "-frames:v",
+        "1",
+        "-vf",
+        f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}",
+        "-q:v",
+        "2",
         str(cover),
     ]
     try:
@@ -1135,8 +1158,7 @@ def _pick_music(music: str | Path | None, cfg: Mapping[str, Any]) -> Path | None
             return path
         if hint == "auto":
             log.warning(
-                "music.file ist leer oder zeigt auf keine Datei - kein Beat-Matching "
-                "aus der Konfiguration"
+                "music.file ist leer oder zeigt auf keine Datei - kein Beat-Matching aus der Konfiguration"
             )
         else:
             log.warning("Musikdatei nicht gefunden: %s", hint)
@@ -1150,9 +1172,7 @@ def _pick_music(music: str | Path | None, cfg: Mapping[str, Any]) -> Path | None
             path = expand_path(pinned)
             if path.is_file():
                 return path
-            log.warning(
-                "spotify.track_file %s nicht gefunden - Fallback auf music_dir", path
-            )
+            log.warning("spotify.track_file %s nicht gefunden - Fallback auf music_dir", path)
 
     music_dir = get(cfg, "music_dir")
     if not music_dir:
@@ -1169,9 +1189,7 @@ def _pick_music(music: str | Path | None, cfg: Mapping[str, Any]) -> Path | None
     return candidates[0] if candidates else None
 
 
-def _fetch_spotify_beats(
-    track_uri: str, cfg: Mapping[str, Any]
-) -> tuple[list[float] | None, str]:
+def _fetch_spotify_beats(track_uri: str, cfg: Mapping[str, Any]) -> tuple[list[float] | None, str]:
     """Beat-Timestamps von Spotify holen und in Cut-Längen übersetzen.
 
     Gibt ``(Cut-Längen | None, Grund)`` zurück. Der Grund ist leer, wenn die
@@ -1211,13 +1229,13 @@ def _fetch_spotify_beats(
     t_max = float(cut_cfg.get("target_max", 2.0))
     target = min(max(float(cut_cfg.get("target", (t_min + t_max) / 2)), t_min), t_max)
 
-    intervals = [b - a for a, b in zip(beats, beats[1:]) if b - a > 0.05]
+    intervals = [b - a for a, b in zip(beats, beats[1:], strict=False) if b - a > 0.05]
     if not intervals:
         return None, "Spotify-Beats zu unregelmäßig"
     median_beat = float(statistics.median(intervals))
     group = max(1, int(round(median_beat / target)))
     durations: list[float] = []
-    for start, end in zip(beats[::group], beats[::group][1:]):
+    for start, end in zip(beats[::group], beats[::group][1:], strict=False):
         span = end - start
         if span > 0:
             durations.append(min(max(span, t_min), t_max))
@@ -1646,7 +1664,11 @@ def run(
         day_geo_tag = ""
         # Find the first clip in the day that has geo
         for segment in day_segments:
-            if segment.clip.has_geo and segment.clip.latitude is not None and segment.clip.longitude is not None:
+            if (
+                segment.clip.has_geo
+                and segment.clip.latitude is not None
+                and segment.clip.longitude is not None
+            ):
                 day_geo_tag = format_coordinates(segment.clip.latitude, segment.clip.longitude)
                 break
 
@@ -1758,9 +1780,7 @@ def export_reel(
     # Text nur auf den ersten N Cuts. 0 = auf allen (Default 2 = Hook only).
     text_on_first_cuts = int(get(cfg, "text_on_first_cuts", 2) or 0)
     if text_on_first_cuts > 0 and len(segments) > text_on_first_cuts:
-        log.info(
-            "Text-Overlay nur auf den ersten %d von %d Cuts", text_on_first_cuts, len(segments)
-        )
+        log.info("Text-Overlay nur auf den ersten %d von %d Cuts", text_on_first_cuts, len(segments))
     want_audio = bool(video_cfg.get("audio", False))
     rendered = render_segments(
         segments,
@@ -1884,14 +1904,12 @@ def export_reel(
             # Genau der Fall, den der Nutzer gemeldet hat: Musik war gewählt,
             # das Ergebnis war trotzdem stumm.
             log.error(
-                "%s enthält trotz gemischter Musik keine Tonspur - der Ton "
-                "wurde nicht geschrieben",
+                "%s enthält trotz gemischter Musik keine Tonspur - der Ton wurde nicht geschrieben",
                 target.name,
             )
         else:
             log.warning(
-                "%s enthält trotz video.audio=true keine Tonspur - vermutlich "
-                "hatten die Quellen keinen Ton",
+                "%s enthält trotz video.audio=true keine Tonspur - vermutlich hatten die Quellen keinen Ton",
                 target.name,
             )
 
@@ -2022,7 +2040,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         cfg = load_config(args.config)
     except ConfigError as exc:
-        print(f"Konfigurationsfehler: {exc}", file=sys.stderr)
+        print(f"Konfigurationsfehler: {exc}", file=sys.stderr)  # noqa: T201
         return 2
     setup_logging(cfg, quiet=args.quiet)
 
@@ -2053,7 +2071,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     if args.json:
-        print(
+        print(  # noqa: T201
             json.dumps(
                 {
                     "output": str(result.output) if result.output else None,

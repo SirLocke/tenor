@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from src.metadata import ClipInfo
 from src.pipeline import build_parser, build_segments
 from src.styling import GradeConfig, apply_grade, make_grader
@@ -206,7 +205,16 @@ class TestGradeConfigToneCurve:
 class TestPacingAndDuration:
     def test_cli_parser_accepts_duration_grade_pace(self) -> None:
         parser = build_parser()
-        args = parser.parse_args(["-i", "clip.mov", "--duration", "30", "--grade", "natural", "--pace", "medium"])
+        args = parser.parse_args([
+            "-i",
+            "clip.mov",
+            "--duration",
+            "30",
+            "--grade",
+            "natural",
+            "--pace",
+            "medium",
+        ])
         assert args.duration == 30.0
         assert args.grade == "natural"
         assert args.pace == "medium"

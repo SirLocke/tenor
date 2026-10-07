@@ -322,9 +322,7 @@ def load_config(
             raise ConfigError(f"{config_path} muss ein YAML-Mapping enthalten")
         raw = loaded
     else:
-        logging.getLogger(__name__).warning(
-            "Keine config.yaml gefunden - verwende eingebaute Vorgabewerte."
-        )
+        logging.getLogger(__name__).warning("Keine config.yaml gefunden - verwende eingebaute Vorgabewerte.")
 
     merged = _deep_merge(DEFAULTS, raw)
     if overrides:

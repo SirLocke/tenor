@@ -47,8 +47,7 @@ FONT_URLS: dict[str, tuple[tuple[str, float | None], ...]] = {
     ),
     "mono": (
         (
-            "https://raw.githubusercontent.com/google/fonts/main"
-            "/ofl/robotomono/RobotoMono%5Bwght%5D.ttf",
+            "https://raw.githubusercontent.com/google/fonts/main/ofl/robotomono/RobotoMono%5Bwght%5D.ttf",
             400.0,
         ),
     ),
@@ -224,10 +223,8 @@ def apply_grade(frame: np.ndarray, lut: np.ndarray, grade: GradeConfig) -> np.nd
         array = array[:, :, :3]
 
     # --- Stufe 1: Tonwertkurve via LUT ---------------------------------- #
-    if cv2 is not None:
-        toned = cv2.LUT(array, lut)
-    else:  # numpy-Fallback
-        toned = lut[array]
+    # numpy-Fallback, wenn cv2 nicht verfügbar ist
+    toned = cv2.LUT(array, lut) if cv2 is not None else lut[array]
 
     # --- Stufe 2: Farbstufe --------------------------------------------- #
     img = toned.astype(np.float32) * (1.0 / 255.0)
@@ -235,9 +232,7 @@ def apply_grade(frame: np.ndarray, lut: np.ndarray, grade: GradeConfig) -> np.nd
 
     # Schatten: entsättigen und kühlen (Cine-Teal/Slate)
     shadow_w = np.square(1.0 - luma)
-    sat = np.clip(
-        grade.saturation * (1.0 - grade.shadow_desaturate * shadow_w), 0.0, 2.0
-    )[:, :, None]
+    sat = np.clip(grade.saturation * (1.0 - grade.shadow_desaturate * shadow_w), 0.0, 2.0)[:, :, None]
     luma3 = luma[:, :, None]
     img = luma3 + sat * (img - luma3)
 
@@ -349,9 +344,12 @@ def resolve_font_path(cfg: Mapping[str, Any], kind: str) -> Path | None:
         candidate = expand_path(configured)
         if candidate.is_file():
             return candidate
-        if bool(get(cfg, "fonts.auto_download", True)) and kind in FONT_URLS:
-            if _ensure_font(kind, candidate):
-                return candidate
+        if (
+            bool(get(cfg, "fonts.auto_download", True))
+            and kind in FONT_URLS
+            and _ensure_font(kind, candidate)
+        ):
+            return candidate
 
     fallbacks = get(cfg, "fonts.system_fallbacks", []) or []
     for fallback in fallbacks:
@@ -406,7 +404,7 @@ def _draw_tracked(
     total = float(sum(widths) + tracking * max(len(text) - 1, 0))
     x = (anchor_right - total) if anchor_right is not None else xy[0]
     y = xy[1]
-    for char, width in zip(text, widths):
+    for char, width in zip(text, widths, strict=False):
         draw.text((x, y), char, font=font, fill=fill, anchor="lt")
         x += width + tracking
     return total
@@ -531,35 +529,29 @@ def build_text_overlay(
     # (Zeilen, Font, Farbe, Tracking, Zeilenhöhe)
     blocks: list[tuple[list[str], Any, str, int, float]] = []
     if title_lines:
-        blocks.append(
-            (
-                title_lines,
-                title_font,
-                str(text_cfg.get("title_color", "#FFFFFF")),
-                title_tracking,
-                _line_height(title_font),
-            )
-        )
+        blocks.append((
+            title_lines,
+            title_font,
+            str(text_cfg.get("title_color", "#FFFFFF")),
+            title_tracking,
+            _line_height(title_font),
+        ))
     if subtitle_lines:
-        blocks.append(
-            (
-                subtitle_lines,
-                subtitle_font,
-                str(text_cfg.get("subtitle_color", "#D0D5DD")),
-                subtitle_tracking,
-                _line_height(subtitle_font),
-            )
-        )
+        blocks.append((
+            subtitle_lines,
+            subtitle_font,
+            str(text_cfg.get("subtitle_color", "#D0D5DD")),
+            subtitle_tracking,
+            _line_height(subtitle_font),
+        ))
     if geo_lines:
-        blocks.append(
-            (
-                geo_lines,
-                geo_font,
-                str(text_cfg.get("geo_color", "#9CA3AF")),
-                geo_tracking,
-                _line_height(geo_font),
-            )
-        )
+        blocks.append((
+            geo_lines,
+            geo_font,
+            str(text_cfg.get("geo_color", "#9CA3AF")),
+            geo_tracking,
+            _line_height(geo_font),
+        ))
 
     total_height = sum(line_h * len(lines) for lines, _f, _c, _t, line_h in blocks)
     total_height += line_gap * (len(blocks) - 1)

@@ -9,6 +9,7 @@ iPhone-Burst (IMG_0001..IMG_0012) in einem einzigen Reel landet.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import math
@@ -91,9 +92,7 @@ def size_stable(path: Path, checks: int = 2, poll: float = 1.0) -> bool:
     return True
 
 
-def wait_until_stable(
-    path: Path, stable_seconds: float, poll: float = 1.0, max_wait: float = 0.0
-) -> bool:
+def wait_until_stable(path: Path, stable_seconds: float, poll: float = 1.0, max_wait: float = 0.0) -> bool:
     """Blockiert, bis Dateigröße und -änderungszeit ``stable_seconds`` lang stabil sind.
 
     ``max_wait`` (Sekunden) setzt eine harte Obergrenze. Ohne sie blieb der
@@ -256,9 +255,7 @@ def _restore_backup(path: Path) -> WatcherState | None:
         return None
     state = WatcherState(path=path)
     state.processed = {
-        str(k): float(v)
-        for k, v in raw.items()
-        if isinstance(v, (int, float)) and math.isfinite(float(v))
+        str(k): float(v) for k, v in raw.items() if isinstance(v, (int, float)) and math.isfinite(float(v))
     }
     log.warning("State aus Backup wiederhergestellt (%d Einträge)", len(state.processed))
     return state
@@ -377,9 +374,7 @@ class IngestProcessor:
         files = [
             p
             for p in batch
-            if is_media(p, self.extensions)
-            and not self.state.is_processed(p)
-            and self._may_retry(p)
+            if is_media(p, self.extensions) and not self.state.is_processed(p) and self._may_retry(p)
         ]
         if not files:
             log.info("Keine neuen Dateien im Batch - nichts zu tun")
@@ -573,10 +568,8 @@ def watch(cfg: Mapping[str, Any], *, config_path: str | None = None, once: bool 
         processor.request_stop()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
+        with contextlib.suppress(ValueError):  # pragma: no cover - nicht im Hauptthread
             signal.signal(sig, _shutdown)
-        except ValueError:  # pragma: no cover - nicht im Hauptthread
-            pass
 
     handler = IngestHandler(processor)
     observer = Observer()
@@ -648,7 +641,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         cfg = load_config(args.config)
     except ConfigError as exc:
-        print(f"Konfigurationsfehler: {exc}", file=sys.stderr)
+        print(f"Konfigurationsfehler: {exc}", file=sys.stderr)  # noqa: T201
         return 2
 
     if args.ingest:

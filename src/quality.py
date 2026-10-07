@@ -232,12 +232,22 @@ def _extract_strip(
     """Ein ffmpeg-Durchlauf: Graustufen-Strip als rohe Bytes."""
     strip_w, strip_h = _strip_size(width, height)
     cmd = [
-        "ffmpeg", "-v", "error", "-nostdin",
-        "-i", str(path),
-        "-an", "-sn", "-dn",
-        "-vf", f"fps={sample_fps},scale={strip_w}:{strip_h}",
-        "-pix_fmt", "gray",
-        "-f", "rawvideo", "-",
+        "ffmpeg",
+        "-v",
+        "error",
+        "-nostdin",
+        "-i",
+        str(path),
+        "-an",
+        "-sn",
+        "-dn",
+        "-vf",
+        f"fps={sample_fps},scale={strip_w}:{strip_h}",
+        "-pix_fmt",
+        "gray",
+        "-f",
+        "rawvideo",
+        "-",
     ]
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
@@ -333,13 +343,11 @@ def _store_cache(npz: Path, meta: Path, analysis: ClipAnalysis) -> None:
                 )
             os.replace(tmp, npz)
             meta.write_text(
-                json.dumps(
-                    {
-                        "path": str(analysis.path),
-                        "duration": analysis.duration,
-                        "sample_fps": analysis.sample_fps,
-                    }
-                ),
+                json.dumps({
+                    "path": str(analysis.path),
+                    "duration": analysis.duration,
+                    "sample_fps": analysis.sample_fps,
+                }),
                 encoding="utf-8",
             )
         except BaseException:
@@ -456,9 +464,21 @@ def window_score(analysis: ClipAnalysis, start: float, end: float, cfg: QualityC
         index = int(np.clip(np.searchsorted(times, (start + end) / 2.0), 0, times.size - 1))
         lo, hi = index, index + 1
 
-    motion = float(getattr(analysis, "motion", np.zeros(times.size))[lo:hi].mean()) if hasattr(analysis, "motion") else 0.0
-    faces = float(getattr(analysis, "faces", np.zeros(times.size))[lo:hi].mean()) if hasattr(analysis, "faces") else 0.0
-    color_variance = float(getattr(analysis, "color_variance", np.zeros(times.size))[lo:hi].mean()) if hasattr(analysis, "color_variance") else 0.0
+    motion = (
+        float(getattr(analysis, "motion", np.zeros(times.size))[lo:hi].mean())
+        if hasattr(analysis, "motion")
+        else 0.0
+    )
+    faces = (
+        float(getattr(analysis, "faces", np.zeros(times.size))[lo:hi].mean())
+        if hasattr(analysis, "faces")
+        else 0.0
+    )
+    color_variance = (
+        float(getattr(analysis, "color_variance", np.zeros(times.size))[lo:hi].mean())
+        if hasattr(analysis, "color_variance")
+        else 0.0
+    )
 
     return WindowScore(
         start=start,
@@ -611,14 +631,12 @@ def find_highlights(
         score = window_score(analysis, current, current + avg_length, cfg)
         if score.frames > 0:
             problems = _local_problems(score, cfg)
-            candidates.append(
-                {
-                    "start": current,
-                    "end": current + avg_length,
-                    "problems": len(problems),
-                    "sharpness": score.sharpness,
-                }
-            )
+            candidates.append({
+                "start": current,
+                "end": current + avg_length,
+                "problems": len(problems),
+                "sharpness": score.sharpness,
+            })
         current += 0.5
 
     # Sortiere Kandidaten: am wenigsten Probleme zuerst, dann höchste Schärfe
@@ -697,9 +715,7 @@ def spread_windows(duration: float, lengths: list[float], edge_trim: float) -> l
     return starts
 
 
-def clamp_start(
-    start: float, length: float, source_duration: float, edge: float = 0.0
-) -> float:
+def clamp_start(start: float, length: float, source_duration: float, edge: float = 0.0) -> float:
     """Hält ein Fenster in die Quelldatei, ohne seine Länge zu verändern.
 
     ``edge`` hält zusätzlich Abstand zum Anfang und Ende der Quelle. Ist der
@@ -880,9 +896,7 @@ def analyse_clips(
         height = int(getattr(clip, "height", 0) or 0)
         duration = float(getattr(clip, "duration", 0.0) or 0.0)
         try:
-            analyses[path] = analyse_clip(
-                path, width=width, height=height, duration=duration, cfg=local
-            )
+            analyses[path] = analyse_clip(path, width=width, height=height, duration=duration, cfg=local)
         except Exception as exc:  # Analyse darf den Lauf nie stoppen
             log.warning("Qualitätsanalyse für %s abgebrochen: %s", path.name, exc)
             analyses[path] = ClipAnalysis(

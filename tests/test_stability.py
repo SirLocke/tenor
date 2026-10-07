@@ -142,15 +142,13 @@ def test_state_survives_corrupt_json_via_backup(tmp_path: Path) -> None:
 def test_state_keeps_good_entries_when_one_is_bad(tmp_path: Path) -> None:
     state_path = tmp_path / ".tenor-state.json"
     state_path.write_text(
-        json.dumps(
-            {
-                "processed": {
-                    "/good.mov": 1.0,
-                    "/bad.mov": "kein-float",
-                    "/nan.mov": float("nan"),
-                }
+        json.dumps({
+            "processed": {
+                "/good.mov": 1.0,
+                "/bad.mov": "kein-float",
+                "/nan.mov": float("nan"),
             }
-        ),
+        }),
         encoding="utf-8",
     )
     loaded = WatcherState.load(state_path)
@@ -341,9 +339,7 @@ def test_wait_until_stable_gives_up_eventually(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # BPM-Fallback
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize(
-    "bpm", [60, 80, 90, 100, 110, 120, 124, 128, 132, 140, 160, 174, 200]
-)
+@pytest.mark.parametrize("bpm", [60, 80, 90, 100, 110, 120, 124, 128, 132, 140, 160, 174, 200])
 def test_durations_from_bpm_respects_target_range(bpm: float) -> None:
     cut = {"target_min": 1.4, "target_max": 2.0, "target": 1.7}
     durations = durations_from_bpm(bpm, cut)
@@ -354,10 +350,7 @@ def test_durations_from_bpm_respects_target_range(bpm: float) -> None:
 
 @pytest.mark.parametrize("bpm", [0, -1, float("nan")])
 def test_durations_from_bpm_rejects_bad_input(bpm: float) -> None:
-    assert (
-        durations_from_bpm(bpm, {"target_min": 1.4, "target_max": 2.0, "target": 1.7})
-        == []
-    )
+    assert durations_from_bpm(bpm, {"target_min": 1.4, "target_max": 2.0, "target": 1.7}) == []
 
 
 def test_fallback_bpm_prefers_explicit_cut_setting() -> None:
@@ -475,9 +468,7 @@ def test_collect_clips_honours_ignore_dirs(tmp_path: Path) -> None:
     (tmp_path / "imgest" / "a.mov").touch()
     (tmp_path / "Madeira" / "b.mov").touch()
 
-    clips = collect_clips(
-        [tmp_path], extensions=[".mov"], ignore_dirs=["imgest"], recursive=True
-    )
+    clips = collect_clips([tmp_path], extensions=[".mov"], ignore_dirs=["imgest"], recursive=True)
     assert [c.path.name for c in clips] == ["b.mov"]
 
 
@@ -534,9 +525,7 @@ def test_build_segment_clip_never_exceeds_source_duration() -> None:
     pipeline_module.center_crop_resize = lambda piece, _w, _h: piece  # type: ignore[assignment]
     try:
         with pytest.raises(ValueError, match="außerhalb"):
-            build_segment_clip(
-                segment, {}, GradeConfig(), None, fps=30, width=1080, height=1920
-            )
+            build_segment_clip(segment, {}, GradeConfig(), None, fps=30, width=1080, height=1920)
     finally:
         pipeline_module._open_source = original  # type: ignore[assignment]
         pipeline_module.center_crop_resize = original_crop  # type: ignore[assignment]
@@ -574,9 +563,7 @@ def test_cli_audio_flag_reaches_run(tmp_path: Path) -> None:
 
     def _fake_run(*_args: Any, **kwargs: Any) -> SimpleNamespace:
         captured.update(kwargs)
-        return SimpleNamespace(
-            output=None, outputs=[], covers=[], segments=[], errors=[]
-        )
+        return SimpleNamespace(output=None, outputs=[], covers=[], segments=[], errors=[])
 
     original = pipeline_module.run
     pipeline_module.run = _fake_run  # type: ignore[assignment]
@@ -626,9 +613,7 @@ def test_watcher_audio_flag_reaches_pipeline(tmp_path: Path) -> None:
 
     def _fake_run(*_args: Any, **kwargs: Any) -> SimpleNamespace:
         captured.update(kwargs)
-        return SimpleNamespace(
-            ok=True, output=None, outputs=[], covers=[], segments=[], errors=[]
-        )
+        return SimpleNamespace(ok=True, output=None, outputs=[], covers=[], segments=[], errors=[])
 
     cfg: dict[str, Any] = {
         **DEFAULTS,
@@ -678,8 +663,17 @@ def _music_file(tmp_path: Path, seconds: float = 1.5, freq: int = 440) -> Path:
 
     target = tmp_path / f"song-{seconds}-{freq}.wav"
     subprocess.run(
-        ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
-         "-i", f"aevalsrc=0.9*sin(2*PI*{freq}*t):s=44100:d={seconds}", str(target)],
+        [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"aevalsrc=0.9*sin(2*PI*{freq}*t):s=44100:d={seconds}",
+            str(target),
+        ],
         check=True,
         capture_output=True,
     )
@@ -707,8 +701,7 @@ def _rms(clip, start: float, end: float, fps: int = 8000) -> float:
 
     section = clip.subclipped(start, end)
     count = max(int(round((end - start) * fps)), 1)
-    samples = np.array([np.asarray(section.get_frame(i / fps), dtype=float)
-                        for i in range(count)])
+    samples = np.array([np.asarray(section.get_frame(i / fps), dtype=float) for i in range(count)])
     return float(np.sqrt((samples**2).mean()))
 
 
@@ -760,12 +753,10 @@ def test_original_audio_is_ducked_under_music(tmp_path: Path) -> None:
     cfg = {"music": {"gain": 0.0, "fade_out": 0.0}, "video": {"original_gain": 0.25}}
 
     ducked = mix_music(video, song, cfg)
-    loud = mix_music(video, song, {"music": {"gain": 0.0, "fade_out": 0.0},
-                                  "video": {"original_gain": 1.0}})
+    loud = mix_music(video, song, {"music": {"gain": 0.0, "fade_out": 0.0}, "video": {"original_gain": 1.0}})
     assert ducked is not None and loud is not None
     # Bei Gain 0 hört man nur den Originalton: 0,25 ist rund ein Viertel.
-    assert _rms(ducked.audio, 0.5, 1.0) == pytest.approx(_rms(loud.audio, 0.5, 1.0) * 0.25,
-                                                         rel=0.02)
+    assert _rms(ducked.audio, 0.5, 1.0) == pytest.approx(_rms(loud.audio, 0.5, 1.0) * 0.25, rel=0.02)
 
 
 def test_mix_uses_moviepy_v2_api_only(tmp_path: Path) -> None:
@@ -801,8 +792,9 @@ def test_mono_original_ton_unter_stereo_musik(tmp_path: Path) -> None:
     video = _silent_video(duration=3.0).with_audio(
         AudioClip(lambda t: np.sin(2 * np.pi * 220 * t), duration=3.0, fps=22050)  # mono
     )
-    mixed = mix_music(video, song, {"music": {"gain": 0.5, "fade_out": 0.0},
-                                   "video": {"original_gain": 0.25}})
+    mixed = mix_music(
+        video, song, {"music": {"gain": 0.5, "fade_out": 0.0}, "video": {"original_gain": 0.25}}
+    )
     assert mixed is not None and mixed.audio is not None
     assert int(getattr(mixed.audio, "nchannels", 1)) >= 2
     assert _rms(mixed.audio, 0.5, 1.0) > 0.0
@@ -1034,9 +1026,7 @@ def test_resolve_beats_reports_blocked_spotify(tmp_path: Path) -> None:
     try:
         durations, source, note = pipeline_module._resolve_beats(None, cfg, cfg["cut"])
     finally:
-        pipeline_module._fetch_spotify_beats, pipeline_module.detect_beat_durations = (
-            originals  # type: ignore[assignment]
-        )
+        pipeline_module._fetch_spotify_beats, pipeline_module.detect_beat_durations = originals  # type: ignore[assignment]
 
     assert durations == [1.5]
     assert source == "beats:song.mp3"
@@ -1109,9 +1099,7 @@ def test_resolve_beats_cli_file_wins_over_spotify(tmp_path: Path) -> None:
     pipeline_module._fetch_spotify_beats = _fake_spotify  # type: ignore[assignment]
     pipeline_module.detect_beat_durations = lambda _path, _cut: [1.5]  # type: ignore[assignment]
     try:
-        _durations, source, _note = pipeline_module._resolve_beats(
-            str(song), cfg, cfg["cut"]
-        )
+        _durations, source, _note = pipeline_module._resolve_beats(str(song), cfg, cfg["cut"])
     finally:
         pipeline_module._fetch_spotify_beats = original_fetch  # type: ignore[assignment]
         pipeline_module.detect_beat_durations = original_detect  # type: ignore[assignment]
@@ -1139,7 +1127,9 @@ def test_detect_beat_durations_median_calculation(tmp_path: Path) -> None:
     dummy_music.touch()
 
     with patch.dict(sys.modules, {"librosa": fake_librosa}):
-        durations = pipeline_module.detect_beat_durations(dummy_music, {"target": 1.7, "target_min": 1.4, "target_max": 2.0})
+        durations = pipeline_module.detect_beat_durations(
+            dummy_music, {"target": 1.7, "target_min": 1.4, "target_max": 2.0}
+        )
 
     assert len(durations) > 0
     assert all(1.4 <= d <= 2.0 for d in durations)
@@ -1148,9 +1138,7 @@ def test_detect_beat_durations_median_calculation(tmp_path: Path) -> None:
 @patch("src.spotify_beats.get_token")
 @patch("src.spotify_beats._requests")
 @patch("src.spotify_beats.time.sleep")
-def test_spotify_429_exponential_backoff(
-    mock_sleep: Mock, mock_requests: Mock, mock_get_token: Mock
-) -> None:
+def test_spotify_429_exponential_backoff(mock_sleep: Mock, mock_requests: Mock, mock_get_token: Mock) -> None:
     from src.spotify_beats import _auth_get
 
     mock_get_token.return_value = "fake-token"
@@ -1180,9 +1168,7 @@ def test_spotify_429_exponential_backoff(
 @patch("src.spotify_beats.get_token")
 @patch("src.spotify_beats._requests")
 @patch("src.spotify_beats.time.sleep")
-def test_spotify_429_retry_after_header(
-    mock_sleep: Mock, mock_requests: Mock, mock_get_token: Mock
-) -> None:
+def test_spotify_429_retry_after_header(mock_sleep: Mock, mock_requests: Mock, mock_get_token: Mock) -> None:
     from src.spotify_beats import _auth_get
 
     mock_get_token.return_value = "fake-token"
@@ -1266,10 +1252,12 @@ def test_unique_path_different_suffixes(tmp_path: Path) -> None:
     res_no_ext = unique_path(tmp_path, "folder", "")
     assert res_no_ext == tmp_path / "folder_2"
 
+
 def test_dry_run_renders_without_writing(tmp_path: Path) -> None:
-    from src.pipeline import export_reel, Segment, ClipInfo
+    from unittest.mock import MagicMock, patch
+
+    from src.pipeline import ClipInfo, Segment, export_reel
     from src.styling import GradeConfig
-    from unittest.mock import patch, MagicMock
 
     cfg = {"naming": {"folder_template": ""}, "video": {"audio": True}}
     base_out = tmp_path / "output"

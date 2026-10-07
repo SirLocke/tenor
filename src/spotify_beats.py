@@ -176,9 +176,7 @@ def _auth_get(url: str, *, quota_locked: bool = False) -> Any | None:
 
         while True:
             try:
-                response = requests.get(
-                    url, headers={"Authorization": f"Bearer {token}"}, timeout=20
-                )
+                response = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=20)
             except Exception as exc:
                 log.warning("Spotify-Anfrage fehlgeschlagen: %s", exc)
                 return None
@@ -218,9 +216,7 @@ def _auth_get(url: str, *, quota_locked: bool = False) -> Any | None:
         if response.status_code == 403 and quota_locked:
             raise SpotifyAccessError(QUOTA_HINT)
         if not response.ok:
-            log.warning(
-                "Spotify HTTP %s bei %s", response.status_code, url.rsplit("/", 1)[-1]
-            )
+            log.warning("Spotify HTTP %s bei %s", response.status_code, url.rsplit("/", 1)[-1])
             return None
         try:
             return response.json()
