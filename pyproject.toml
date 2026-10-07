@@ -77,6 +77,9 @@ line-length = 110
 target-version = "py311"
 src = ["src", "tests"]
 exclude = [".venv", "dist", "build", "*.egg-info"]
+preview = true
+
+[tool.ruff.lint]
 select = [
     "E",   # pycodestyle errors
     "F",   # pyflakes
@@ -94,7 +97,6 @@ ignore = [
     "SIM103", # redundant return
 ]
 per-file-ignores = { "tests/*" = ["S101", "S106"] }  # assert, subprocess in tests
-preview = true
 
 [tool.ruff.format]
 quote-style = "double"
