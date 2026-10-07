@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from src.metadata import ClipInfo
 from src.pipeline import build_parser, build_segments
-from src.styling import GradeConfig, apply_grade, make_grader
+from src.styling import GradeConfig, apply_grade, make_grader, resolve_font_path
 
 
 class TestApplyGradeEdgeCases:
@@ -252,3 +252,95 @@ class TestPacingAndDuration:
         assert len(seen_paths) == 5  # Jeder Clip ist im Schnittplan vertreten!
         total_dur = sum(s.duration for s in segments)
         assert 20.0 <= total_dur <= 30.0
+
+
+class TestResolveFontPath:
+    def test_configured_font_path_exists(self, tmp_path: Path) -> None:
+        font_file = tmp_path / "custom_font.ttf"
+        font_file.touch()
+        cfg = {"fonts": {"bold": str(font_file)}}
+
+        resolved = resolve_font_path(cfg, "bold")
+        assert resolved == font_file
+
+    def test_configured_font_missing_auto_download_success(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        font_file = tmp_path / "downloaded_font.ttf"
+        cfg = {"fonts": {"bold": str(font_file), "auto_download": True}}
+
+        def mock_ensure_font(kind: str, target: Path) -> bool:
+            assert kind == "bold"
+            assert target == font_file
+            return True
+
+        monkeypatch.setattr("src.styling._ensure_font", mock_ensure_font)
+
+        resolved = resolve_font_path(cfg, "bold")
+        assert resolved == font_file
+
+    def test_configured_font_missing_auto_download_fails_uses_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        font_file = tmp_path / "nonexistent.ttf"
+        fallback_file = tmp_path / "fallback.ttf"
+        fallback_file.touch()
+
+        cfg = {
+            "fonts": {
+                "bold": str(font_file),
+                "auto_download": True,
+                "system_fallbacks": [str(tmp_path / "missing_fallback.ttf"), str(fallback_file)],
+            }
+        }
+
+        monkeypatch.setattr("src.styling._ensure_font", lambda kind, target: False)
+
+        resolved = resolve_font_path(cfg, "bold")
+        assert resolved == fallback_file
+
+    def test_configured_font_missing_auto_download_disabled_uses_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        font_file = tmp_path / "nonexistent.ttf"
+        fallback_file = tmp_path / "fallback.ttf"
+        fallback_file.touch()
+
+        cfg = {
+            "fonts": {
+                "bold": str(font_file),
+                "auto_download": False,
+                "system_fallbacks": [str(fallback_file)],
+            }
+        }
+
+        ensure_called = False
+
+        def mock_ensure_font(kind: str, target: Path) -> bool:
+            nonlocal ensure_called
+            ensure_called = True
+            return True
+
+        monkeypatch.setattr("src.styling._ensure_font", mock_ensure_font)
+
+        resolved = resolve_font_path(cfg, "bold")
+        assert resolved == fallback_file
+        assert not ensure_called
+
+    def test_no_configured_font_uses_fallback(self, tmp_path: Path) -> None:
+        fallback_file = tmp_path / "fallback.ttf"
+        fallback_file.touch()
+
+        cfg = {"fonts": {"system_fallbacks": [str(fallback_file)]}}
+
+        resolved = resolve_font_path(cfg, "bold")
+        assert resolved == fallback_file
+
+    def test_no_configured_font_and_no_fallbacks_returns_none(self, tmp_path: Path) -> None:
+        cfg = {"fonts": {"system_fallbacks": [str(tmp_path / "nonexistent.ttf")]}}
+
+        resolved = resolve_font_path(cfg, "bold")
+        assert resolved is None
+
+    def test_empty_config_returns_none(self) -> None:
+        assert resolve_font_path({}, "regular") is None
