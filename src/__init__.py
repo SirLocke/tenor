@@ -74,6 +74,7 @@ DEFAULTS: dict[str, Any] = {
         "audio_nbytes": 2,
         "faststart": True,
         "max_duration": 0,
+        "platform": "generic",
     },
     "cut": {
         "target_min": 1.4,

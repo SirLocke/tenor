@@ -1442,6 +1442,7 @@ def run(
     lossless: bool = False,
     audio: bool | None = None,
     bpm: float | None = None,
+    platform: str | None = None,
 ) -> RenderResult:
     """Kompletter Pipeline-Lauf: Metadaten -> Schnitt -> Render -> Export.
 
@@ -1470,6 +1471,9 @@ def run(
     if bpm is not None:
         cfg.setdefault("cut", {})
         cfg["cut"]["fallback_bpm"] = float(bpm)
+    if platform is not None:
+        cfg.setdefault("video", {})
+        cfg["video"]["platform"] = str(platform)
 
     video_cfg = get(cfg, "video", {}) or {}
     cut_cfg = dict(get(cfg, "cut", {}) or {})
@@ -1698,6 +1702,23 @@ def run(
     return result
 
 
+def select_bitrate(platform: str, source_res: int) -> int:
+    """Wählt die Ziel-Videobitrate in kbps basierend auf Plattform und Quellauflösung."""
+    ladder = {
+        "instagram": {1080: 3500, 720: 2500, 480: 1000},
+        "tiktok": {1080: 4000, 720: 3000, 480: 1500},
+        "youtube_shorts": {1080: 5000, 720: 3500, 480: 2000},
+        "generic": {1080: 4500, 720: 3000, 480: 1500},
+    }
+
+    tier_map = ladder.get(platform, ladder["generic"])
+    if source_res >= 1080:
+        return tier_map[1080]
+    elif source_res >= 720:
+        return tier_map[720]
+    else:
+        return tier_map[480]
+
 def export_reel(
     segments: Sequence[Segment],
     cfg: Mapping[str, Any],
@@ -1801,8 +1822,23 @@ def export_reel(
             crf = 0
             preset = "ultrafast"
 
-        if crf is not None:
-            ffmpeg_params += ["-crf", str(crf)]
+        if is_lossless:
+            if crf is not None:
+                ffmpeg_params += ["-crf", str(crf)]
+        else:
+            # Adaptive bitrate calculation
+            platform = str(video_cfg.get("platform", "generic"))
+            source_res = 0
+            if segments:
+                source_res = max(max(s.clip.width, s.clip.height) for s in segments)
+
+            target_bitrate = select_bitrate(platform, source_res)
+            ffmpeg_params += [
+                "-b:v", f"{target_bitrate}k",
+                "-maxrate", f"{target_bitrate}k",
+                "-bufsize", f"{2 * target_bitrate}k"
+            ]
+
         if bool(video_cfg.get("faststart", True)):
             ffmpeg_params += ["-movflags", "+faststart"]
         threads = int(video_cfg.get("threads", 0) or 0)
@@ -1975,6 +2011,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Expliziter BPM-Wert (überschreibt cut.fallback_bpm)",
     )
+    parser.add_argument(
+        "--platform",
+        choices=["instagram", "tiktok", "youtube_shorts", "generic"],
+        default=None,
+        help="Zielplattform für Bitraten-Auswahl (instagram, tiktok, youtube_shorts, generic)",
+    )
     audio_group = parser.add_mutually_exclusive_group()
     audio_group.add_argument(
         "--audio",
@@ -2031,6 +2073,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         lossless=args.lossless,
         audio=args.audio,
         bpm=args.bpm,
+        platform=args.platform,
     )
 
     if args.json:
