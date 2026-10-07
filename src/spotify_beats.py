@@ -248,31 +248,37 @@ def fetch_spotify_beats(track_uri: str) -> list[float] | None:
         log.warning("Ungültige Spotify-Referenz: %r", track_uri)
         return None
 
-    data = _auth_get(SPOTIFY_ANALYSIS_URL.format(track_id=track_id), quota_locked=True)
-    if data is None:
+    try:
+        data = _auth_get(SPOTIFY_ANALYSIS_URL.format(track_id=track_id), quota_locked=True)
+        if data is None:
+            return None
+
+        raw = data.get("beats") if isinstance(data, dict) else None
+        if not isinstance(raw, list) or not raw:
+            log.warning("Spotify lieferte keine Beats für %s", track_uri)
+            return None
+
+        beats: list[float] = []
+        for entry in raw:
+            try:
+                value = float(entry["start"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if value >= 0.0 and value == value:  # NaN aussortieren
+                beats.append(value)
+        beats.sort()
+
+        tempo = 0.0
+        track = data.get("track") if isinstance(data, dict) else None
+        if isinstance(track, dict):
+            try:
+                tempo = float(track.get("tempo") or 0.0)
+            except (TypeError, ValueError):
+                tempo = 0.0
+        log.info("Spotify: %d Beats, Tempo ~%.1f BPM für %s", len(beats), tempo, track_uri)
+        return beats or None
+    except SpotifyAccessError:
+        raise
+    except Exception as exc:
+        log.warning("Fehler beim Abruf der Spotify-Beats: %s", exc)
         return None
-
-    raw = data.get("beats") if isinstance(data, dict) else None
-    if not isinstance(raw, list) or not raw:
-        log.warning("Spotify lieferte keine Beats für %s", track_uri)
-        return None
-
-    beats: list[float] = []
-    for entry in raw:
-        try:
-            value = float(entry["start"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        if value >= 0.0 and value == value:  # NaN aussortieren
-            beats.append(value)
-    beats.sort()
-
-    tempo = 0.0
-    track = data.get("track") if isinstance(data, dict) else None
-    if isinstance(track, dict):
-        try:
-            tempo = float(track.get("tempo") or 0.0)
-        except (TypeError, ValueError):
-            tempo = 0.0
-    log.info("Spotify: %d Beats, Tempo ~%.1f BPM für %s", len(beats), tempo, track_uri)
-    return beats or None

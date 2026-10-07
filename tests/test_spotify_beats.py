@@ -399,3 +399,11 @@ class TestFetchSpotifyBeats:
             pytest.raises(SpotifyAccessError),
         ):
             fetch_spotify_beats("4uLU612A35POGL3A3X3iie")
+
+    def test_fetch_spotify_beats_generic_exception(self, caplog: pytest.LogCaptureFixture) -> None:
+        with patch("src.spotify_beats._auth_get", side_effect=Exception("API connection failure")):
+            with caplog.at_level("WARNING"):
+                res = fetch_spotify_beats("4uLU612A35POGL3A3X3iie")
+                assert res is None
+
+            assert "Fehler beim Abruf der Spotify-Beats: API connection failure" in caplog.text
