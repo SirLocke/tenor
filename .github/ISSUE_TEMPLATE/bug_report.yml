@@ -1,0 +1,124 @@
+name: Bug Report
+description: File a bug report
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+
+  - type: input
+    id: version
+    attributes:
+      label: tenor version
+      description: Output of `python -m src.pipeline --version` or git tag/commit
+      placeholder: "1.0.0 or commit abc123"
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      description: Output of `python --version`
+      placeholder: "3.12.3"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      description: Distribution and version
+      placeholder: "Ubuntu 24.04 / Arch Linux / etc."
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of what the bug is.
+      placeholder: "When I run X, Y happens instead of Z."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal, complete steps to reproduce the behavior.
+      placeholder: |
+        1. Set up config with ...
+        2. Place clip at ...
+        3. Run `python -m src.pipeline -i ...`
+        4. Observe error
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen.
+      placeholder: "The pipeline should ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened (error messages, logs, output).
+      placeholder: "Instead, the pipeline ..."
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs / Output
+      description: Paste relevant log output (redact paths/secrets).
+      placeholder: |
+        14:32:15 ERROR tenor.pipeline: ffprobe failed on clip.MOV: ...
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant Config
+      description: Relevant sections of your config.yaml (redact secrets like Spotify credentials).
+      placeholder: |
+        video:
+          audio: true
+        quality:
+          enabled: true
+      render: yaml
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other information, configuration, or data that might help resolve the issue.
+      placeholder: "This happens only with HEVC clips from iPhone 15 Pro..."
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched existing issues for duplicates
+          required: true
+        - label: I have tested with the latest main branch
+          required: true
+        - label: I have included all relevant information above
+          required: true

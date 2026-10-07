@@ -1,0 +1,189 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tenor"
+version = "1.0.0"
+description = "Automatische Video-Pipeline für Heimserver: Ingest → Beat-Schnitt → Dark-Film-Grading → 9:16 Reels/Shorts"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Nils", email = "nils@example.com"}
+]
+maintainers = [
+    {name = "Nils", email = "nils@example.com"}
+]
+keywords = [
+    "video",
+    "pipeline",
+    "reels",
+    "shorts",
+    "ffmpeg",
+    "beat-matching",
+    "grading",
+    "automation",
+    "watchdog",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Multimedia :: Video :: Conversion",
+]
+requires-python = ">=3.11"
+dependencies = [
+    "moviepy==2.2.1",
+    "numpy==2.5.3",
+    "opencv-python-headless==5.0.0.93",
+    "pillow==11.3.0",
+    "librosa==1.0.0",
+    "geopy==2.5.0",
+    "PyYAML==6.0.3",
+    "requests>=2.31.0",
+    "watchdog==6.0.0",
+]
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.16.9",
+    "mypy==2.4.0",
+    "pre-commit==4.0.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/SirLocke/tenor"
+Repository = "https://github.com/SirLocke/tenor"
+Issues = "https://github.com/SirLocke/tenor/issues"
+Changelog = "https://github.com/SirLocke/tenor/blob/main/CHANGELOG.md"
+
+[project.scripts]
+tenor = "src.pipeline:main"
+tenor-watcher = "src.watcher:main"
+tenor-metadata = "src.metadata:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["src*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "tests"]
+exclude = [".venv", "dist", "build", "*.egg-info"]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "W",   # pycodestyle warnings
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "T20", # flake8-print
+]
+ignore = [
+    "E501",  # line too long (handled by line-length)
+    "B008",  # function calls in default argument
+    "SIM103", # redundant return
+]
+per-file-ignores = { "tests/*" = ["S101", "S106"] }  # assert, subprocess in tests
+preview = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+strict_optional = true
+show_error_codes = true
+namespace_packages = true
+explicit_package_bases = true
+ignore_missing_imports = false
+warn_no_return = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+allow_untyped_globals = true
+allow_untyped_calls = true
+
+[[tool.mypy.overrides]]
+module = "moviepy.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "librosa.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "cv2.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "PIL.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "watchdog.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "yaml.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "geopy.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "numpy.*"
+ignore_missing_imports = true
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "src.*"
+ignore_errors = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-q --strict-markers --strict-config"
+markers = [
+    "slow: marks tests as slow",
+    "integration: marks tests as integration tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:moviepy",
+    "ignore::DeprecationWarning:librosa",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*", "src/__pycache__/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+[tool.pre-commit]
+exclude = "^(dist|build|\\.venv)/"

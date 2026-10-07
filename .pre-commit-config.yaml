@@ -1,0 +1,75 @@
+# Pre-commit configuration for tenor
+
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+
+repos:
+  # Ruff: fast Python linter + formatter (replaces flake8, isort, black, pyupgrade, etc.)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.9
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        types_or: [python, pyi]
+      - id: ruff-format
+        types_or: [python, pyi]
+
+  # MyPy: static type checking
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.13.0
+    hooks:
+      - id: mypy
+        additional_dependencies: [
+          "moviepy==2.2.1",
+          "numpy==2.5.3",
+          "opencv-python-headless==5.0.0.93",
+          "pillow==11.3.0",
+          "librosa==1.0.0",
+          "geopy==2.5.0",
+          "PyYAML==6.0.3",
+          "requests>=2.31.0",
+          "watchdog==6.0.0",
+          "types-requests",
+          "types-PyYAML",
+        ]
+        args: [--strict, --show-error-codes]
+        types_or: [python, pyi]
+
+  # Check for merge conflicts
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  # Validate GitHub Actions workflows
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+    hooks:
+      - id: actionlint
+        files: \.github/workflows/.*\.ya?ml$
+
+  # Check shell scripts (systemd units aren't shell but good to have)
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.10.0
+    hooks:
+      - id: shellcheck
+        files: \.sh$
+
+  # Conventional commits validation
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.2.0
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+        args: [--config, pyproject.toml]
+
+# Global configuration
+default_stages: [pre-commit]
+default_install_hook_types: [pre-commit, commit-msg]
+exclude: ^(dist|build|\.venv|\.git)/
+fail_fast: true
