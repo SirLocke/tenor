@@ -1822,12 +1822,12 @@ def export_reel(
             preset = "ultrafast"
 
         if crf is not None:
-            ffmpeg_params += ["-crf", str(crf)]
+            ffmpeg_params.extend(["-crf", str(crf)])
         if bool(video_cfg.get("faststart", True)):
-            ffmpeg_params += ["-movflags", "+faststart"]
+            ffmpeg_params.extend(["-movflags", "+faststart"])
         threads = int(video_cfg.get("threads", 0) or 0)
         if threads:
-            ffmpeg_params += ["-threads", str(threads)]
+            ffmpeg_params.extend(["-threads", str(threads)])
 
         write_kwargs: dict[str, Any] = {
             "fps": int(video_cfg.get("fps", 30)),
