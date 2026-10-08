@@ -696,7 +696,7 @@ def render_segments(
             _close_all(local_sources)
 
     # Use ThreadPoolExecutor for parallel rendering
-    with ThreadPoolExecutor() as executor:
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as executor:
         futures = []
         for i, seg in enumerate(segments, start=1):
             futures.append(executor.submit(_render_one, i, seg))
