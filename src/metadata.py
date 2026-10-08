@@ -268,21 +268,21 @@ def parse_coordinates(value: str | None) -> tuple[float | None, float | None]:
     match = _SIGNED_PAIR.search(text)
     if match:
         lat, lon = _to_float(match.group(1)), _to_float(match.group(2))
-        if _valid_coords(lat, lon) and -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+        if _valid_coords(lat, lon):
             return (lat, lon)
 
     match = _SHORT_PAIR.search(text)
     if match:
         lat = _to_float(match.group(1) + match.group(2))
         lon = _to_float(match.group(3) + match.group(4))
-        if _valid_coords(lat, lon) and -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+        if _valid_coords(lat, lon):
             return (lat, lon)
 
     dms = _DMS.findall(text)
     if len(dms) >= 2:
         lat = _dms_to_deg(*dms[0])
         lon = _dms_to_deg(*dms[1])
-        if _valid_coords(lat, lon) and -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+        if _valid_coords(lat, lon):
             return (lat, lon)
 
     return (None, None)
