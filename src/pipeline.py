@@ -577,13 +577,17 @@ def build_segment_clip(
 
     source_duration = float(source.duration or 0.0)
     frame = 1.0 / fps
-    start = max(min(segment.start, max(source_duration - 0.05, 0.0)), 0.0)
+
+    aligned_start = round(segment.start * fps) / fps
+    aligned_end = round(segment.end * fps) / fps
+
+    start = max(min(aligned_start, max(source_duration - 0.05, 0.0)), 0.0)
     # Obergrenze gewinnt: das min()-Clamp darf NICHT von einem
     # start+frame-Floor überstimmt werden, sonst liest subclipped über EOF.
-    end = min(segment.end, source_duration)
+    end = min(aligned_end, source_duration)
     if end <= start:
         raise ValueError(
-            f"Cut {segment.start:.2f}-{segment.end:.2f}s liegt außerhalb von "
+            f"Cut {aligned_start:.2f}-{aligned_end:.2f}s liegt außerhalb von "
             f"{segment.clip.name} (Dauer {source_duration:.2f}s)"
         )
     end = max(end, min(start + frame, source_duration))
