@@ -20,6 +20,7 @@ import sys
 import tempfile
 import threading
 import time
+import weakref
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -264,6 +265,18 @@ def _restore_backup(path: Path) -> WatcherState | None:
 # --------------------------------------------------------------------------- #
 # Verarbeitung
 # --------------------------------------------------------------------------- #
+class PathLock:
+    """Ein Lock, das weak-referenzierbar ist."""
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    def __enter__(self) -> bool:
+        return self._lock.acquire()
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self._lock.release()
+
+
 class IngestProcessor:
     """Sammelt stabile Dateien ein und startet die Pipeline im Batch."""
 
@@ -300,25 +313,38 @@ class IngestProcessor:
         # .part-Dateien gegeneinander arbeiten ließ.
         self._render_lock = threading.Lock()
         self._stop = threading.Event()
+        self._path_locks = weakref.WeakValueDictionary()
+        self._path_locks_lock = threading.Lock()
 
     # -- Ereignisse ------------------------------------------------------- #
+
+    def _get_path_lock(self, path: Path) -> PathLock:
+        key = str(path.resolve())
+        with self._path_locks_lock:
+            lock = self._path_locks.get(key)
+            if lock is None:
+                lock = PathLock()
+                self._path_locks[key] = lock
+            return lock
+
     def on_file_event(self, path: Path) -> None:
         """Wird vom Handler bei create/move/modify aufgerufen."""
-        if not is_media(path, self.extensions):
-            return
-        try:
-            if self.state.is_processed(path):
-                log.debug("Bereits verarbeitet, ignoriere: %s", path.name)
+        with self._get_path_lock(path):
+            if not is_media(path, self.extensions):
                 return
-        except Exception as exc:  # pragma: no cover
-            log.debug("State-Prüfung fehlgeschlagen (%s): %s", path, exc)
-        with self._lock:
-            if path in self._pending or path in self._inflight:
-                return
-            self._pending.add(path)
-            self._last_added = time.monotonic()
-        log.info("Neue Eingang erkannt: %s", path.name)
-        threading.Thread(target=self._settle_and_collect, args=(path,), daemon=True).start()
+            try:
+                if self.state.is_processed(path):
+                    log.debug("Bereits verarbeitet, ignoriere: %s", path.name)
+                    return
+            except Exception as exc:  # pragma: no cover
+                log.debug("State-Prüfung fehlgeschlagen (%s): %s", path, exc)
+            with self._lock:
+                if path in self._pending or path in self._inflight:
+                    return
+                self._pending.add(path)
+                self._last_added = time.monotonic()
+            log.info("Neue Eingang erkannt: %s", path.name)
+            threading.Thread(target=self._settle_and_collect, args=(path,), daemon=True).start()
 
     def _settle_and_collect(self, path: Path) -> None:
         """Wartet auf Stabilität + Batch-Fenster und triggert danach den Lauf.
