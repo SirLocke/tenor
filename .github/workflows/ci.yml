@@ -43,16 +43,16 @@ jobs:
 
       - name: Run Ruff (lint + format check)
         run: |
-          ruff check src tests
-          ruff format --check src tests
+          python -m ruff check src tests
+          python -m ruff format --check src tests
 
       - name: Run MyPy
         run: |
-          mypy src
+          python -m mypy src
 
       - name: Run Tests
         run: |
-          pytest tests -v
+          python -m pytest tests -v
 
   build:
     name: Build Package
