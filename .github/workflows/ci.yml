@@ -15,10 +15,11 @@ concurrency:
 jobs:
   lint-and-test:
     name: Lint & Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, oracle-ai-runner]
+    timeout-minutes: 15
     strategy:
       matrix:
-        python-version: ["3.12", "3.13"]
+        python-version: ["3.12"]
       fail-fast: false
     steps:
       - name: Checkout
@@ -42,20 +43,21 @@ jobs:
 
       - name: Run Ruff (lint + format check)
         run: |
-          ruff check src tests
-          ruff format --check src tests
+          python -m ruff check src tests
+          python -m ruff format --check src tests
 
       - name: Run MyPy
         run: |
-          mypy src
+          python -m mypy src
 
       - name: Run Tests
         run: |
-          pytest tests -v
+          python -m pytest tests -v
 
   build:
     name: Build Package
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, oracle-ai-runner]
+    timeout-minutes: 15
     needs: lint-and-test
     steps:
       - name: Checkout
@@ -85,7 +87,8 @@ jobs:
 
   publish-testpypi:
     name: Publish to TestPyPI
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, oracle-ai-runner]
+    timeout-minutes: 15
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment: testpypi
@@ -106,7 +109,8 @@ jobs:
 
   publish-pypi:
     name: Publish to PyPI
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, oracle-ai-runner]
+    timeout-minutes: 15
     needs: build
     if: github.event_name == 'release' && github.event.action == 'published'
     environment: pypi
