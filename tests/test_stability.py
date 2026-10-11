@@ -1303,3 +1303,59 @@ def test_dry_run_renders_without_writing(tmp_path: Path) -> None:
         # Output directory should NOT exist (since folder_template is "" it won't create subdirs anyway, but base_out should not be created if it wasn't)
         assert target is not None
         assert not target.exists()
+
+
+def test_watcher_duplicate_events_prevented_by_lock(tmp_path: Path) -> None:
+    import threading
+    import time
+    from unittest.mock import patch
+
+    from src.watcher import IngestProcessor
+
+    cfg = {"ingest_dir": str(tmp_path), "watcher": {"debounce_seconds": 0.5, "batch_window": 0.5}}
+    processor = IngestProcessor(cfg)
+    target_path = tmp_path / "burst.mp4"
+    target_path.touch()
+
+    threads_spawned = 0
+    orig_thread = threading.Thread
+
+    def fake_thread(*args, **kwargs):
+        nonlocal threads_spawned
+        if kwargs.get("target").__name__ == "_settle_and_collect":
+            threads_spawned += 1
+
+            class Dummy:
+                def start(self):
+                    pass
+
+                def join(self):
+                    pass
+
+            return Dummy()
+        return orig_thread(*args, **kwargs)
+
+    in_critical_section = False
+
+    original_is_processed = processor.state.is_processed
+
+    def slow_is_processed(p):
+        nonlocal in_critical_section
+        in_critical_section = True
+        time.sleep(0.5)
+        res = original_is_processed(p)
+        in_critical_section = False
+        return res
+
+    processor.state.is_processed = slow_is_processed
+
+    with patch("threading.Thread", side_effect=fake_thread):
+        t1 = orig_thread(target=processor.on_file_event, args=(target_path,))
+        t2 = orig_thread(target=processor.on_file_event, args=(target_path,))
+        t1.start()
+        time.sleep(0.1)
+        t2.start()
+        t1.join()
+        t2.join()
+
+    assert threads_spawned == 1
