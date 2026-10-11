@@ -267,11 +267,12 @@ def _restore_backup(path: Path) -> WatcherState | None:
 # --------------------------------------------------------------------------- #
 class PathLock:
     """Ein Lock, das weak-referenzierbar ist."""
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
 
-    def __enter__(self) -> bool:
-        return self._lock.acquire()
+    def __enter__(self) -> None:
+        self._lock.acquire()
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         self._lock.release()
@@ -329,9 +330,9 @@ class IngestProcessor:
 
     def on_file_event(self, path: Path) -> None:
         """Wird vom Handler bei create/move/modify aufgerufen."""
+        if not is_media(path, self.extensions):
+            return
         with self._get_path_lock(path):
-            if not is_media(path, self.extensions):
-                return
             try:
                 if self.state.is_processed(path):
                     log.debug("Bereits verarbeitet, ignoriere: %s", path.name)
