@@ -1305,36 +1305,40 @@ def test_dry_run_renders_without_writing(tmp_path: Path) -> None:
         assert not target.exists()
 
 
-
 def test_watcher_duplicate_events_prevented_by_lock(tmp_path: Path) -> None:
-    from src.watcher import IngestProcessor
     import threading
     import time
     from unittest.mock import patch
 
-    cfg = {
-        "ingest_dir": str(tmp_path),
-        "watcher": {"debounce_seconds": 0.5, "batch_window": 0.5}
-    }
+    from src.watcher import IngestProcessor
+
+    cfg = {"ingest_dir": str(tmp_path), "watcher": {"debounce_seconds": 0.5, "batch_window": 0.5}}
     processor = IngestProcessor(cfg)
     target_path = tmp_path / "burst.mp4"
     target_path.touch()
 
     threads_spawned = 0
     orig_thread = threading.Thread
+
     def fake_thread(*args, **kwargs):
         nonlocal threads_spawned
-        if kwargs.get('target', None).__name__ == '_settle_and_collect':
+        if kwargs.get("target").__name__ == "_settle_and_collect":
             threads_spawned += 1
+
             class Dummy:
-                def start(self): pass
-                def join(self): pass
+                def start(self):
+                    pass
+
+                def join(self):
+                    pass
+
             return Dummy()
         return orig_thread(*args, **kwargs)
 
     in_critical_section = False
 
     original_is_processed = processor.state.is_processed
+
     def slow_is_processed(p):
         nonlocal in_critical_section
         in_critical_section = True
