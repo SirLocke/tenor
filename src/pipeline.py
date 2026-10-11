@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import os
+import re
 import shlex
 import statistics
 import subprocess
@@ -1034,16 +1035,28 @@ def trip_from_path(
     return None
 
 
+def _sanitize_path_component(val: str) -> str:
+    """Entfernt potenziell gefährliche Zeichen (Slashes, Traversal) aus Datei-/Ordnernamen."""
+    if not val:
+        return val
+    safe = str(val)
+    safe = re.sub(r'[\/\\]+', '_', safe)
+    safe = safe.replace('..', '')
+    return safe.strip()
+
+
 def _naming_values(cfg: Mapping[str, Any], title: str, when: float, day: str) -> dict[str, str]:
     """Platzhalter für Dateinamen und Unterordner."""
     stamp = time.localtime(when)
+    safe_title = _sanitize_path_component(title)
+    safe_day = _sanitize_path_component(day)
     return {
         "date": time.strftime("%Y-%m-%d", stamp),
         "time": time.strftime("%H%M%S", stamp),
-        "slug": slugify(title),
-        "title": slugify(title, max_length=80),
-        "day": day or time.strftime("%Y-%m-%d", stamp),
-        "trip": slugify(title, max_length=60),
+        "slug": slugify(safe_title),
+        "title": slugify(safe_title, max_length=80),
+        "day": safe_day or time.strftime("%Y-%m-%d", stamp),
+        "trip": slugify(safe_title, max_length=60),
     }
 
 
@@ -1551,7 +1564,7 @@ def run(
         log.error("Alle Eingaben sind kürzer als %.1fs", min_source)
         return result
 
-    place = dominant_place(usable)
+    place = _sanitize_path_component(dominant_place(usable) or "") or None
     result.place = place
     reference = usable[0]
     # Ohne expliziten Titel: Tripname aus dem Ingest-Unterordner, dann
@@ -1661,7 +1674,7 @@ def run(
             log.warning("Kein Cut für den Tag %s - übersprungen", day)
             continue
 
-        day_place = dominant_place(day_clips)
+        day_place = _sanitize_path_component(dominant_place(day_clips) or "") or None
         day_title = title or trip or primary_place(day_place) or day
         day_subtitle = build_subtitle(day_place, day)
 
