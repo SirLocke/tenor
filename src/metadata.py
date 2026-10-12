@@ -638,7 +638,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         cfg = load_config(args.config)
     except ConfigError as exc:
-        print(f"Konfigurationsfehler: {exc}", file=sys.stderr)  # noqa: T201
+        log.error("Konfigurationsfehler: %s", exc)
         return 2
 
     setup_logging(cfg)
@@ -652,14 +652,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         geocoder.save_cache()
 
     if args.json:
-        print(json.dumps([c.to_dict() for c in clips], indent=2, ensure_ascii=False))  # noqa: T201
+        log.info("%s", json.dumps([c.to_dict() for c in clips], indent=2, ensure_ascii=False))
     else:
         for clip in clips:
-            print(  # noqa: T201
-                f"{clip.date_label or '----------'} {clip.time_label or '------'} | "
-                f"{clip.name} | {clip.duration:7.1f}s | "
-                f"{clip.place or (f'{clip.latitude:.4f},{clip.longitude:.4f}' if clip.has_geo else '-')} "
-                f"| {clip.error or 'ok'}"
+            log.info(
+                "%s %s | %s | %7.1fs | %s | %s",
+                clip.date_label or "----------",
+                clip.time_label or "------",
+                clip.name,
+                clip.duration,
+                clip.place or (f"{clip.latitude:.4f},{clip.longitude:.4f}" if clip.has_geo else "-"),
+                clip.error or "ok",
             )
     return 0
 
