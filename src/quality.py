@@ -279,12 +279,12 @@ def _stats_from_strip(strip: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.nda
 
     for index in range(count):
         frame = strip[index]
-        laplacian = cv2.Laplacian(frame, cv2.CV_32F, ksize=3)
-        sharpness[index] = float(laplacian.var())
-        luma[index] = float(frame.mean())
-        black[index] = float((frame < 16).mean())
-        white[index] = float((frame > 240).mean())
         small = cv2.resize(frame, (SIGNATURE_SIZE, SIGNATURE_SIZE), interpolation=cv2.INTER_AREA)
+        laplacian = cv2.Laplacian(small, cv2.CV_32F, ksize=3)
+        sharpness[index] = float(laplacian.var())
+        luma[index] = float(small.mean())
+        black[index] = float((small < 16).mean())
+        white[index] = float((small > 240).mean())
         signatures[index] = small.astype(np.float32).ravel()
 
     return sharpness, luma, black, white, signatures
