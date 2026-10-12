@@ -136,13 +136,16 @@ def detect_beat_durations(music: Path, cut_cfg: Mapping[str, Any]) -> list[float
     if not intervals:
         return []
     median_beat = float(statistics.median(intervals))
-    group = max(1, int(round(median_beat / target)))
+    if median_beat <= 0:
+        return []
+    group = max(1, int(round(target / median_beat)))
+    cut_len = median_beat * group
     log.info(
         "Beat-Grid: Tempo ~%.0f BPM, Beat-Abstand %.2fs -> Gruppe %d (Cut ~%.2fs)",
         60.0 / median_beat if median_beat else 0.0,
         median_beat,
         group,
-        median_beat * group,
+        cut_len,
     )
 
     grid = beats[::group]
@@ -153,7 +156,7 @@ def detect_beat_durations(music: Path, cut_cfg: Mapping[str, Any]) -> list[float
             continue
         durations.append(min(max(span, t_min), t_max))
     if not durations:
-        durations = [min(max(median_beat * group, t_min), t_max)]
+        durations = [min(max(cut_len, t_min), t_max)]
     return durations
 
 
