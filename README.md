@@ -140,6 +140,9 @@ Unterordner.
   Material nicht mehr, es liegt nur 5 min und wird erneut versucht.
 - **Ein Reel pro Tag**: Material aus mehreren Aufnahmetagen wird automatisch
   getrennt, damit im Ordner `2026-09-12/` auch wirklich nur der 12.09. liegt.
+  Bewusst zusammenführen: `--single-reel` (Alias `--merge-days`) bündelt alle
+  Clips in *einem* Reel; der Ablageordner wird dann zum Tagesbereich
+  (`2026-09-27_2026-09-30`).
 - **Tripname aus dem Ingest-Ordner**: `ingest/Madeira 2026/` ergibt
   `output/Madeira-2026/` – ohne einen Titelparameter überall.
 - **State-Datei** (`.tenor-state.json`) verhindert Doppelverarbeitung nach
@@ -286,7 +289,10 @@ der ausgeschaltete Wert `255` bzw. `1.0`.
 
 Wichtige Flags der Pipeline: `--no-cover`, `--no-geo` (ohne Netzwerk),
 `--limit N`, `--json`, `--delete-after` (Rohclits nach Export löschen),
-`--audio` / `--no-audio` (Ton an/aus), `--dry-run`. `--json` meldet mit
+`--audio` / `--no-audio` (Ton an/aus), `--dry-run`, `--pace fast|medium|slow`
+und `--bpm N`. Mit `--single-reel` (Alias `--merge-days`) werden Clips aus
+mehreren Aufnahmetagen bewusst in *einem* Reel gebündelt statt pro Tag getrennt
+(der Homelab-Selector nutzt das bei Mehrfachauswahl). `--json` meldet mit
 `beat_source` die tatsächlich verwendete Beat-Quelle und mit `beat_note` eine
 Erklärung, falls die gewünschte Quelle nicht nutzbar war.
 
