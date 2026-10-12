@@ -10,7 +10,6 @@ import json
 import logging
 import re
 import subprocess
-import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -638,7 +637,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         cfg = load_config(args.config)
     except ConfigError as exc:
-        print(f"Konfigurationsfehler: {exc}", file=sys.stderr)  # noqa: T201
+        log.error("Konfigurationsfehler: %s", exc)
         return 2
 
     setup_logging(cfg)
