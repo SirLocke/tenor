@@ -651,17 +651,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         geocoder.save_cache()
 
     if args.json:
-        log.info("%s", json.dumps([c.to_dict() for c in clips], indent=2, ensure_ascii=False))
+        print(json.dumps([c.to_dict() for c in clips], indent=2, ensure_ascii=False))  # noqa: T201
     else:
         for clip in clips:
-            log.info(
-                "%s %s | %s | %7.1fs | %s | %s",
-                clip.date_label or "----------",
-                clip.time_label or "------",
-                clip.name,
-                clip.duration,
-                clip.place or (f"{clip.latitude:.4f},{clip.longitude:.4f}" if clip.has_geo else "-"),
-                clip.error or "ok",
+            print(  # noqa: T201
+                f"{clip.date_label or '----------'} {clip.time_label or '------'} | "
+                f"{clip.name} | {clip.duration:7.1f}s | "
+                f"{clip.place or (f'{clip.latitude:.4f},{clip.longitude:.4f}' if clip.has_geo else '-')} "
+                f"| {clip.error or 'ok'}"
             )
     return 0
 
