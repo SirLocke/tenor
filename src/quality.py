@@ -447,6 +447,28 @@ class WindowScore:
         return not self.problems
 
 
+def _safe_mean(arr: np.ndarray, default: float = 0.0) -> float:
+    if arr.size == 0:
+        return default
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        m = float(np.nanmean(arr))
+    return default if np.isnan(m) else m
+
+
+def _safe_mean_signature(arr: np.ndarray) -> np.ndarray:
+    if arr.size == 0:
+        return np.zeros(SIGNATURE_SIZE * SIGNATURE_SIZE, dtype=np.float32)
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        m = np.nanmean(arr, axis=0)
+    return np.nan_to_num(m, nan=0.0).astype(np.float32)
+
+
 def window_score(analysis: ClipAnalysis, start: float, end: float, cfg: QualityConfig) -> WindowScore:
     """Mittelwerte aller abgetasteten Frames, die in ``[start, end)`` liegen."""
     empty = np.zeros(SIGNATURE_SIZE * SIGNATURE_SIZE, dtype=np.float32)
@@ -465,17 +487,17 @@ def window_score(analysis: ClipAnalysis, start: float, end: float, cfg: QualityC
         lo, hi = index, index + 1
 
     motion = (
-        float(getattr(analysis, "motion", np.zeros(times.size))[lo:hi].mean())
+        _safe_mean(getattr(analysis, "motion", np.zeros(times.size))[lo:hi])
         if hasattr(analysis, "motion")
         else 0.0
     )
     faces = (
-        float(getattr(analysis, "faces", np.zeros(times.size))[lo:hi].mean())
+        _safe_mean(getattr(analysis, "faces", np.zeros(times.size))[lo:hi])
         if hasattr(analysis, "faces")
         else 0.0
     )
     color_variance = (
-        float(getattr(analysis, "color_variance", np.zeros(times.size))[lo:hi].mean())
+        _safe_mean(getattr(analysis, "color_variance", np.zeros(times.size))[lo:hi])
         if hasattr(analysis, "color_variance")
         else 0.0
     )
@@ -484,11 +506,11 @@ def window_score(analysis: ClipAnalysis, start: float, end: float, cfg: QualityC
         start=start,
         end=end,
         frames=int(hi - lo),
-        sharpness=float(analysis.sharpness[lo:hi].mean()),
-        luma=float(analysis.luma[lo:hi].mean()),
-        black_ratio=float(analysis.black_ratio[lo:hi].mean()),
-        white_ratio=float(analysis.white_ratio[lo:hi].mean()),
-        signature=analysis.signatures[lo:hi].mean(axis=0),
+        sharpness=_safe_mean(analysis.sharpness[lo:hi]),
+        luma=_safe_mean(analysis.luma[lo:hi]),
+        black_ratio=_safe_mean(analysis.black_ratio[lo:hi]),
+        white_ratio=_safe_mean(analysis.white_ratio[lo:hi]),
+        signature=_safe_mean_signature(analysis.signatures[lo:hi]),
         motion=motion,
         faces=faces,
         color_variance=color_variance,
