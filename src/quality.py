@@ -279,6 +279,8 @@ def _stats_from_strip(strip: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.nda
 
     for index in range(count):
         frame = strip[index]
+        # Calculate Laplacian variance on the 160x90 strip frame. Downscaling further
+        # (e.g. to 16x16) acts as a strong low-pass filter and breaks the calibrated thresholds.
         laplacian = cv2.Laplacian(frame, cv2.CV_32F, ksize=3)
         sharpness[index] = float(laplacian.var())
         luma[index] = float(frame.mean())
