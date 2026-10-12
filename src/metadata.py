@@ -10,7 +10,6 @@ import json
 import logging
 import re
 import subprocess
-import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
