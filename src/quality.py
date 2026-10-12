@@ -451,6 +451,7 @@ def _safe_mean(arr: np.ndarray, default: float = 0.0) -> float:
     if arr.size == 0:
         return default
     import warnings
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         m = float(np.nanmean(arr))
@@ -461,6 +462,7 @@ def _safe_mean_signature(arr: np.ndarray) -> np.ndarray:
     if arr.size == 0:
         return np.zeros(SIGNATURE_SIZE * SIGNATURE_SIZE, dtype=np.float32)
     import warnings
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         m = np.nanmean(arr, axis=0)
