@@ -40,9 +40,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: Vorgabewerte. ``config.yaml`` wird tief in diese Struktur hinein gemergt,
 #: fehlende Keys bleiben dadurch immer befüllt.
 DEFAULTS: dict[str, Any] = {
-    "ingest_dir": "/srv/nas/Nils/video-cut/ingest",
-    "output_dir": "/srv/nas/Nils/video-cut/output",
-    "music_dir": "/srv/nas/Nils/video-cut/music",
+    "ingest_dir": "~/video-cut/ingest",
+    "output_dir": "~/video-cut/output",
+    "music_dir": "~/video-cut/music",
     "extensions": [".mov", ".mp4", ".m4v", ".hevc", ".h265"],
     # Musik, die als *Ton* ins Reel gemischt wird. Ohne `file` wird nichts
     # gemischt - die Auswahl im Homelab kommt als `-m` daher. `original_gain`
@@ -295,6 +295,22 @@ def _apply_env_overrides(cfg: dict[str, Any], prefix: str = "TENOR_") -> None:
         cfg[key] = _coerce(raw, value)
 
 
+def _read_yaml_mapping(path: Path) -> dict[str, Any]:
+    """Liest eine YAML-Datei und stellt sicher, dass sie ein Mapping enthält."""
+    try:
+        import yaml  # lazy import, damit Defaults auch ohne PyYAML laden
+    except ImportError as exc:  # pragma: no cover
+        raise ConfigError("PyYAML fehlt - 'pip install -r requirements.txt'") from exc
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            loaded = yaml.safe_load(fh) or {}
+    except Exception as exc:
+        raise ConfigError(f"{path} ist kein gültiges YAML: {exc}") from exc
+    if not isinstance(loaded, dict):
+        raise ConfigError(f"{path} muss ein YAML-Mapping enthalten")
+    return loaded
+
+
 def load_config(
     path: str | os.PathLike[str] | None = None,
     *,
@@ -302,27 +318,27 @@ def load_config(
 ) -> dict[str, Any]:
     """Lädt die Konfiguration, merged sie mit den Defaults und substituiert ``${VAR}``.
 
-    Reihenfolge der Priorität (steigend): Defaults < config.yaml < explizite
+    Reihenfolge der Priorität (steigend): Defaults < ``config.yaml`` <
+    ``config.local.yaml`` (optional, nicht eingecheckt) < explizite
     ``overrides`` < ``TENOR_*``-Umgebungsvariablen.
+
+    ``config.local.yaml`` liegt neben der gewählten ``config.yaml`` und wird
+    dort automatisch über die eingecheckte Konfiguration gemergt. So bleiben
+    lokale Pfade und Zugangsdaten aus dem Repository heraus, ohne den
+    eingespielten Betrieb (Watcher/systemd) zu ändern.
     """
     config_path = find_config(path)
     raw: dict[str, Any] = {}
 
     if config_path.is_file():
-        try:
-            import yaml  # lazy import, damit Defaults auch ohne PyYAML laden
-        except ImportError as exc:  # pragma: no cover
-            raise ConfigError("PyYAML fehlt - 'pip install -r requirements.txt'") from exc
-        try:
-            with config_path.open("r", encoding="utf-8") as fh:
-                loaded = yaml.safe_load(fh) or {}
-        except Exception as exc:
-            raise ConfigError(f"{config_path} ist kein gültiges YAML: {exc}") from exc
-        if not isinstance(loaded, dict):
-            raise ConfigError(f"{config_path} muss ein YAML-Mapping enthalten")
-        raw = loaded
+        raw = _read_yaml_mapping(config_path)
     else:
         logging.getLogger(__name__).warning("Keine config.yaml gefunden - verwende eingebaute Vorgabewerte.")
+
+    # Lokale, nicht eingecheckte Overrides neben der Config (config.local.yaml).
+    local_path = config_path.with_name("config.local.yaml")
+    if local_path.is_file():
+        raw = _deep_merge(raw, _read_yaml_mapping(local_path))
 
     merged = _deep_merge(DEFAULTS, raw)
     if overrides:
@@ -330,6 +346,8 @@ def load_config(
     merged = _substitute(merged)
     _apply_env_overrides(merged)
     merged["_config_path"] = str(config_path)
+    if local_path.is_file():
+        merged["_local_config_path"] = str(local_path)
     return merged
 
 

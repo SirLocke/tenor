@@ -10,9 +10,9 @@ Documentation=https://github.com/SirLocke/tenor
 # Verzeichnis, das der Watcher überwacht (muss ingest_dir aus config.yaml
 # entsprechen). PathModified feuert, sobald sich Änderungszeit *oder* Inhalt
 # des Ordners ändern.
-PathModified=/srv/nas/Nils/video-cut/ingest
+PathModified=%h/video-cut/ingest
 # DirectoryNotEmpty feuert nur, wenn Dateien vorhanden sind:
-# DirectoryNotEmpty=/srv/nas/Nils/video-cut/ingest
+# DirectoryNotEmpty=%h/video-cut/ingest
 Unit=tenor-watcher.service
 
 [Install]

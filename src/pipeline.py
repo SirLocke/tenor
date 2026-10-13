@@ -2,7 +2,7 @@
 
 CLI-Beispiel::
 
-    python -m src.pipeline -i /srv/nas/nils/videos -o /srv/nas/nils/videos/output -t "Madeira 2026"
+    python -m src.pipeline -i ~/video-cut/ingest -o ~/video-cut/output -t "Madeira 2026"
     python -m src.pipeline -i clip.MOV -o out/ -t "Madeira" -m song.mp3
 """
 

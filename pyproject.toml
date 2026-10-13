@@ -9,10 +9,10 @@ description = "Automatische Video-Pipeline für Heimserver: Ingest → Beat-Schn
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "Nils", email = "nils@example.com"}
+    {name = "SirLocke"}
 ]
 maintainers = [
-    {name = "Nils", email = "nils@example.com"}
+    {name = "SirLocke"}
 ]
 keywords = [
     "video",

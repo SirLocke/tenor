@@ -59,8 +59,10 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at
-**conduct@tenor.example.com** (replace with actual contact).
+reported to the community leaders responsible for enforcement by opening a
+**confidential** report via the repository's GitHub **Security → Report a
+vulnerability** channel, or by contacting the maintainers
+[@SirLocke](https://github.com/SirLocke) directly.
 
 All complaints will be reviewed and investigated promptly and fairly.
 
