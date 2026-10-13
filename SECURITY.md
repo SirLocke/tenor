@@ -14,7 +14,9 @@ We release security patches for the following versions:
 **Please do not open public issues for security vulnerabilities.**
 
 If you discover a security vulnerability in tenor, please report it
-responsibly by emailing **security@tenor.example.com** (replace with actual contact).
+responsibly through GitHub's **private vulnerability reporting**: open the
+repository's **Security** tab and use **"Report a vulnerability"**. That opens
+a private advisory visible only to the maintainers.
 
 ### What to Include
 

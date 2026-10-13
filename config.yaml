@@ -5,13 +5,13 @@
 # =============================================================================
 
 # Ingest: Hier landen die Rohclips (iPhone MOV/MP4). Wird vom Watcher überwacht.
-ingest_dir: /srv/nas/Nils/video-cut/ingest
+ingest_dir: ~/video-cut/ingest
 # Export: fertige Reels/Shorts + Cover-Thumbnails, unterteilt nach <Trip>/<Tag>/
-output_dir: /srv/nas/Nils/video-cut/output
+output_dir: ~/video-cut/output
 # Musik: MP3s fuer Beat-Matching. Die neueste Datei liefert nur den Takt; als
 # Ton ins Reel kommt Musik nur, wenn sie bewusst gewaehlt wurde (-m <datei>,
 # Homelab-Auswahl oder -m auto auf music.file unten).
-music_dir: /srv/nas/Nils/video-cut/music
+music_dir: ~/video-cut/music
 
 # Als Rohmaterial akzeptierte Endungen (case-insensitiv geprüft).
 # HEVC: iPhone liefert H.265 als .MOV/.MP4, teils auch als Rohbitstream.
@@ -69,7 +69,7 @@ video:
 music:
   # Feste Musikdatei fuer `-m auto` (bzw. TENOR_MUSIC_FILE). Leer = bei `-m
   # auto` wird nichts gemischt.
-  #   file: /srv/nas/Nils/video-cut/music/the_waves.mp3
+  #   file: ~/video-cut/music/the_waves.mp3
   file: ""
   gain: 1.0            # Pegel der Musik (1.0 = unveraendert)
   fade_in: 0.0         # Einblenden am Reel-Anfang, Sekunden (0 = hart)
@@ -145,7 +145,7 @@ quality:
   # Was passiert, wenn auch alle Varianten durchfallen:
   drop_duplicates: true  # echte Wiederholung verwerfen
   keep_imperfect: true   # unsauberes Bild behalten (weiches Bild schlägt Lücke)
-  cache_dir: /srv/nas/Nils/video-cut/.cache/quality
+  cache_dir: ~/video-cut/.cache/quality
 
 # =============================================================================
 # Color Grading ("Natürlicher, dezenter Look")
@@ -209,7 +209,7 @@ geocoding:
   zoom: 10
   language: de
   user_agent: "tenor/1.0 (self-hosted video pipeline; +https://github.com/SirLocke/tenor)"
-  cache_file: /srv/nas/Nils/video-cut/.cache/geocoding.json
+  cache_file: ~/video-cut/.cache/geocoding.json
   cache_precision: 3       # Nachkommastellen für Cache-Key (~$100m)
 
 # =============================================================================
@@ -235,16 +235,16 @@ watcher:
 # =============================================================================
 # Nextcloud Auto-Scan (optional)
 # Nach jedem Export: Nextcloud dazu bringen, neue Dateien zu indizieren.
-# Standard: deaktiviert. Für Docker:
-#   scan_cmd: "docker exec nextcloud occ files:scan nils --path=/Reels"
+# Standard: deaktiviert. Für Docker (Benutzer/Pfad anpassen):
+#   scan_cmd: "docker exec nextcloud occ files:scan <user> --path=/Reels"
 # Für lokale Instanz:
-#   scan_cmd: "occ files:scan nils --path=/data/nils/files/Reels"
+#   scan_cmd: "occ files:scan <user> --path=/data/<user>/files/Reels"
 # =============================================================================
 nextcloud:
-  enabled: true
-  # Externer Speicher: /NAS-Nils gemountet unter /nas/Nils im Container
-  # Nextcloud-Pfad: /nils/files/NAS-Nils/video-cut/output
-  scan_cmd: 'docker exec nextcloud php /var/www/html/occ files:scan --path="/nils/files/NAS-Nils/video-cut/output"'
+  enabled: false
+  # Beispiel (docker exec in den Nextcloud-Container); für den eigenen Aufbau
+  # anpassen oder in config.local.yaml überschreiben.
+  scan_cmd: 'docker exec nextcloud php /var/www/html/occ files:scan <user> --path="/Reels"'
   timeout: 60
 
 # =============================================================================
@@ -253,11 +253,11 @@ nextcloud:
 # Benötigt SPOTIFY_CLIENT_ID + SPOTIFY_CLIENT_SECRET als Env-Vars.
 # =============================================================================
 spotify:
-  enabled: true
+  enabled: false
   # Track, an dessen Beats geschnitten wird. URI oder URL, z. B.
   #   track_uri: "spotify:track:4cOdK2wGLETKBW3PvgPWqT"
   # Alternativ auf der CLI: python -m src.pipeline -m "spotify:track:<ID>"
-  track_uri: "spotify:track:0Hcr3kdSB9NVQmFckRsgSD"
+  track_uri: ""
 
   # ACHTUNG (Stand 2026): Spotify beantwortet /v1/audio-analysis für jede App,
   # die nach dem 27.11.2024 registriert wurde, dauerhaft mit HTTP 403. Ohne
@@ -265,13 +265,13 @@ spotify:
   # Auswahl bliebe stumm und es würde auf den BPM-Fallback zurückfallen.
   # track_file ist der Ausweg: die AUDIO des gewählten Tracks als lokale Datei.
   # librosa gewinnt daraus dieselben Beat-Zeitpunkte, ganz ohne API.
-  #   track_file: /srv/nas/Nils/video-cut/music/the_waves.mp3
+  #   track_file: ~/video-cut/music/the_waves.mp3
   # Ist die Datei nicht lesbar, greift als naechstes die neueste Datei aus
   # music_dir und danach der BPM-Fallback.
   #
   # Ohne die Datei im Repo zu aendern, per Env-Variable festnageln (geht auch
   # ueber die systemd-Unit, siehe spotify.env):
-  #   TENOR_SPOTIFY_TRACK_FILE=/srv/nas/Nils/video-cut/music/the_waves.mp3
+  #   TENOR_SPOTIFY_TRACK_FILE=~/video-cut/music/the_waves.mp3
   track_file: ""
 
   # Wird nur benutzt, wenn weder Spotify noch eine MP3 im music_dir vorliegt.
@@ -299,4 +299,4 @@ naming:
 
 logging:
   level: INFO
-  file: /srv/nas/Nils/video-cut/.cache/tenor.log
+  file: ~/video-cut/.cache/tenor.log

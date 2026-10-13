@@ -8,7 +8,7 @@ Originalton der Clips.
 
 ```
 Rohclips (MOV/MP4)                     Reels + Cover
-/srv/nas/Nils/video-cut/ingest   ──►  /srv/nas/Nils/video-cut/output
+~/video-cut/ingest   ──►  ~/video-cut/output
         │  watchdog + Debounce                    │
         │  ffprobe (Zeit/GPS)                     └─ 1080x1920 H.264, yuv420p, 30 fps
         │  librosa Beat-Grid                         (Ton nur mit -m/--audio/AAC)
@@ -21,7 +21,7 @@ Die Clips werden nach **Tripname und Aufnahmetag** sortiert. Der Tripname ist
 der Ordnername unterhalb von `ingest_dir`:
 
 ```
-/srv/nas/Nils/video-cut/
+~/video-cut/
 ├── ingest/                     ← hier landen die Rohclips
 │   └── Madeira 2026/           ← Ordnername = Tripname
 │       ├── IMG_1234.MOV
@@ -178,9 +178,9 @@ python3 -m venv .venv
 `config.yaml` anpassen – mindestens `ingest_dir`, `output_dir`, `music_dir`:
 
 ```yaml
-ingest_dir: /srv/nas/Nils/video-cut/ingest
-output_dir: /srv/nas/Nils/video-cut/output
-music_dir: /srv/nas/Nils/video-cut/music
+ingest_dir: ~/video-cut/ingest
+output_dir: ~/video-cut/output
+music_dir: ~/video-cut/music
 ```
 
 Werte lassen sich auch per Umgebungsvariable überschreiben – der Name ist der
@@ -222,18 +222,32 @@ Die Musik im fertigen Reel steckt in `music:`:
 Kürzere Tracks loopen bis über die Reellänge, längere werden darauf geschnitten –
 der Ton darf nicht vor dem letzten Bild verstummen.
 
-Der Grading-Look steckt komplett in `style:`:
+Der Grading-Look steckt komplett in `style:`. Der eingecheckte Default ist
+`preset: natural` (dezent, lebendig, tiefe Schwarztöne): `gamma: 1.0`,
+`contrast: 0.02`, `black_lift: 0.0`, `black_toe: 1.0`, `highlight_ceiling: 1.0`,
+`saturation: 1.03`, alle Farb-/Teal-/Skin-Werte `0.0`. Die folgende Tabelle
+zeigt die Werte des **`cinematic` (Dark-Film)** Presets, das per
+`--grade cinematic` oder `style.preset: cinematic` aktiviert wird:
 
-| Key | Default | Wirkung |
-| --- | --- | --- |
-| `gamma` | `0.93` | Belichtung: **unter** 1.0 unterbelichtet (düster), über 1.0 hellt auf |
-| `contrast` | `0.22` | Stärke der S-Kurve |
-| `black_lift` / `black_toe` | `0.035` / `2.2` | Matte Black Toe: matter, leicht angehobener Schwarzpunkt |
-| `highlight_ceiling` | `0.92` | Highlight-Roll-Off, verhindert ausgebrannte Himmel, drückt Lichter matter |
-| `saturation` / `shadow_desaturate` | `0.90` / `0.18` | leicht entsättigt, Schatten stärker |
-| `teal_red/green/blue` | `-0.006 / 0.012 / 0.026` | Cine-Teal in den Schatten |
-| `highlight_cool` | `0.010` | Lichter kühlen |
-| `skin_damp` | `0.008` | Haut-/Erdtöne in den Mitteltönen dämpfen |
+| Key | natural (Default) | cinematic | Wirkung |
+| --- | --- | --- | --- |
+| `gamma` | `1.0` | `0.94` | Belichtung: **unter** 1.0 unterbelichtet (düster), über 1.0 hellt auf |
+| `contrast` | `0.02` | `0.18` | Stärke der S-Kurve |
+| `black_lift` | `0.0` | `0.015` | matter, leicht angehobener Schwarzpunkt |
+| `black_toe` | `1.0` | `2.0` | Auslaufkurve der Schatten |
+| `highlight_ceiling` | `1.0` | `0.94` | Highlight-Roll-Off, verhindert ausgebrannte Himmel |
+| `saturation` | `1.03` | `0.92` | Sättigung |
+| `shadow_desaturate` | `0.0` | `0.10` | Schatten stärker entsättigen |
+| `teal_red/green/blue` | `0 / 0 / 0` | `-0.004 / 0.008 / 0.018` | Cine-Teal in den Schatten |
+| `highlight_cool` | `0.0` | `0.008` | Lichter kühlen |
+| `skin_damp` | `0.0` | `0.005` | Haut-/Erdtöne in den Mitteltönen dämpfen |
+
+Presets: `natural` (Default), `cinematic` (Dark-Film) und `original` (kein
+Filter). Einzelne Keys in `style:` überschreiben den Preset-Sockel; Werte, die
+exakt dem `natural`-Sockel entsprechen, werden bei einem anderen Preset
+ignoriert (damit die natürlichen Defaults den Dark-Look nicht aufweichen).
+`--grade <preset>` (bzw. das `preset`-Argument) übernimmt die Preset-Werte
+unverändert und ignoriert die Keys aus `style:`.
 
 `style.text` steuert die Typografie (`anchor_x: 900`, `y_title: 1445`,
 `safe_bottom: 1540`, Schriftgrößen, Tracking, Shadow).
@@ -253,7 +267,7 @@ vollständig ab, dann läuft es exakt wie früher:
 | `search_offsets` | `[0.3, -0.3, 0.6, …]` | Sekunden, um die ein Fenster verschoben wird |
 | `drop_duplicates` | `true` | echte Wiederholung verwerfen statt zu verschieben |
 | `keep_imperfect` | `true` | unsauberes Bild behalten statt zu verwerfen |
-| `cache_dir` | `/srv/nas/Nils/video-cut/.cache/quality` | Strip-Cache |
+| `cache_dir` | `~/video-cut/.cache/quality` | Strip-Cache |
 
 Unter- und Obergrenzen mit `0` sind aus; bei `max_luma` und den Anteilen ist
 der ausgeschaltete Wert `255` bzw. `1.0`.
@@ -263,10 +277,10 @@ der ausgeschaltete Wert `255` bzw. `1.0`.
 ```bash
 # Kompletter Ordner, Beat-Matching über die neueste MP3 im music_dir.
 # Ohne -t wird der Ordnername unterhalb von ingest_dir zum Tripnamen.
-.venv/bin/python -m src.pipeline -i /srv/nas/Nils/video-cut/ingest
+.venv/bin/python -m src.pipeline -i ~/video-cut/ingest
 
 # Tripname und Ausgabeordner explizit
-.venv/bin/python -m src.pipeline -i /srv/nas/Nils/video-cut/ingest -t "Madeira 2026"
+.venv/bin/python -m src.pipeline -i ~/video-cut/ingest -t "Madeira 2026"
 
 # Einzelne Datei, explizite Musik
 .venv/bin/python -m src.pipeline -i clip.MOV -o out/ -t "Madeira" -m song.mp3
@@ -278,10 +292,10 @@ der ausgeschaltete Wert `255` bzw. `1.0`.
 .venv/bin/python -m src.pipeline -i clip.MOV -m song.mp3 --audio
 
 # Nur den Schnittplan ansehen, kein Export (legt nichts an)
-.venv/bin/python -m src.pipeline -i /srv/nas/Nils/video-cut/ingest --dry-run
+.venv/bin/python -m src.pipeline -i ~/video-cut/ingest --dry-run
 
 # Metadaten inspizieren (Debug)
-.venv/bin/python -m src.metadata -i /srv/nas/Nils/video-cut/ingest
+.venv/bin/python -m src.metadata -i ~/video-cut/ingest
 
 # Watcher manuell starten
 .venv/bin/python -m src.watcher --config config.yaml
@@ -347,7 +361,7 @@ Die Units laufen als **Benutzer-Dienst** (`--user`, kein `sudo` beim Rendern
 nötig). Für User-Dienste ggf. einmalig aktivieren:
 
 ```bash
-sudo loginctl enable-linger nils     # sonst kein Start nach dem Abmelden
+sudo loginctl enable-linger "$USER"     # sonst kein Start nach dem Abmelden
 ```
 
 Alternativ ereignisgesteuert statt dauerhaft überwachen:
@@ -371,22 +385,28 @@ tenor/
 ├── .gitignore          # ignoriert .venv, Roh-/Audioformate, Render-Artefakte, Output
 ├── README.md
 ├── requirements.txt    # gepinnte Abhängigkeiten
-├── config.yaml         # Pfade, Grading, Typografie, Watcher, Spotify
+├── pyproject.toml      # Packaging, Ruff/MyPy/Pytest-Konfiguration
+├── config.yaml         # Pfade, Grading, Typografie, Watcher, Spotify (generisch)
+├── config.local.yaml   # optional, nicht eingecheckt: lokale Pfade/Overrides
 ├── src/
-│   ├── __init__.py     # Konfigurations-Infrastruktur (Defaults + Deep-Merge)
+│   ├── __init__.py     # Konfigurations-Infrastruktur (Defaults + Deep-Merge + Env)
 │   ├── pipeline.py     # Beat-Matching, Schnittplan, Rendern, Export, Cover, CLI
 │   ├── metadata.py     # ffprobe, ISO-6709, Reverse-Geocoding, Sortierung, CLI
 │   ├── quality.py      # Bildqualitäts-Gate: Strip-Analyse, Fenster-Planung, Cache
 │   ├── spotify_beats.py# Spotify Audio-Analysis (optional, thread-sicherer Token-Cache)
 │   ├── styling.py      # LUT-Grading, Center-Crop, Font-Auflösung, Text-Overlay
 │   └── watcher.py      # watchdog-Ingest mit Debounce + Batch-Fenster
-├── tests/
-│   ├── test_stability.py  # Regressionstests (47), u. a. gegen den "tauben Watcher"
-│   └── test_quality.py    # Kalibrierung + "verliert nie Material" (51)
+├── tests/              # pytest-Suite (siehe "Tests")
 └── systemd/
     ├── tenor-watcher.service
     └── tenor-watcher.path
 ```
+
+> **Lokale Overrides:** Werte, die nicht ins Repo gehören (echte Ingest-/
+> Output-Pfade, Nextcloud-Befehl, Musik/Track), kommen in `config.local.yaml`
+> neben der `config.yaml`. Sie wird automatisch darüber gemergt und ist per
+> `.gitignore` ausgeschlossen. Priorität (steigend):
+> Defaults < `config.yaml` < `config.local.yaml` < `--config`/CLI < `TENOR_*`.
 
 ### Datenfluss im Detail
 
@@ -486,13 +506,28 @@ Homelab-Auswahl oder `-m auto` (zeigt auf `music.file`). Originalton kommt über
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest tests/ -q
-.venv/bin/python -m ruff check src/ tests/ --select F,E9,E501 --line-length 110
+.venv/bin/python -m pytest tests/ -v
+.venv/bin/python -m ruff check src tests
+.venv/bin/python -m ruff format --check src tests
+.venv/bin/python -m mypy src
 ```
 
-Die Tests decken vor allem die Fehler ab, die im Betrieb still gescheitert
-sind: der Event-Handler, der den inotify-Thread killte, die State-Datei,
-BPM-Fallback und die Cut-Positionen.
+Die Suite deckt vor allem die Fehler ab, die im Betrieb still gescheitert
+sind – u. a. der Event-Handler, der den inotify-Thread killte, die State-Datei,
+BPM-Fallback und die Cut-Positionen:
+
+| Datei | Schwerpunkt |
+| --- | --- |
+| `test_stability.py` | Regressionen: Watcher-Event-Handler, State-Datei, BPM-Fallback, Cut-Positionen |
+| `test_quality.py` | Kalibrierung des Qualitäts-Gates + "verliert nie Material" |
+| `test_merge_days.py` | `--single-reel` / `--merge-days` |
+| `test_metadata_cli.py`, `test_metadata_validation.py` | ffprobe-Parsing, ISO-6709, Koordinaten-Validierung |
+| `test_nextcloud_scan.py` | Nextcloud-Scan (inkl. Command-Injection-Schutz) |
+| `test_spotify_beats.py` | Spotify Audio-Analysis, Token-Cache, Fehlerpfade |
+| `test_styling_and_pacing.py` | Grading-LUT, Typografie, Pacing |
+
+`ruff`/`mypy`-/`pytest`-Konfiguration steht in `pyproject.toml`; dieselben
+Checks laufen in der CI.
 
 `tests/test_quality.py` sichert zusätzlich die Dinge ab, die am echten
 Material *kalibriert* und nicht hergeleitet sind:

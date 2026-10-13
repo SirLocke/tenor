@@ -48,10 +48,10 @@ check: lint fmt-check typecheck test
 
 # Pipeline commands
 run-pipeline:
-	.venv/bin/python -m src.pipeline -i /srv/nas/Nils/video-cut/ingest --dry-run
+	.venv/bin/python -m src.pipeline -i ~/video-cut/ingest --dry-run
 
 run-pipeline-real:
-	.venv/bin/python -m src.pipeline -i /srv/nas/Nils/video-cut/ingest
+	.venv/bin/python -m src.pipeline -i ~/video-cut/ingest
 
 run-watcher:
 	.venv/bin/python -m src.watcher --config config.yaml
@@ -60,7 +60,7 @@ run-watcher-once:
 	.venv/bin/python -m src.watcher --config config.yaml --once
 
 inspect-metadata:
-	.venv/bin/python -m src.metadata -i /srv/nas/Nils/video-cut/ingest
+	.venv/bin/python -m src.metadata -i ~/video-cut/ingest
 
 # Build & Release
 build:
@@ -81,10 +81,10 @@ docker-build:
 
 docker-run:
 	docker run --rm -it \
-	  -v /srv/nas/Nils/video-cut:/srv/nas/Nils/video-cut \
+	  -v ~/video-cut:~/video-cut \
 	  -v ~/.config/tenor:/root/.config/tenor \
 	  tenor:latest \
-	  python -m src.pipeline -i /srv/nas/Nils/video-cut/ingest --dry-run
+	  python -m src.pipeline -i ~/video-cut/ingest --dry-run
 
 # Systemd (local user install)
 systemd-install:
