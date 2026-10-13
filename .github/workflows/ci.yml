@@ -12,6 +12,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
 jobs:
   lint-and-test:
     name: Lint & Test (Python ${{ matrix.python-version }})
@@ -127,3 +132,10 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           verbose: true
+
+  ai:
+    name: AI
+    needs: build
+    if: github.event_name == 'pull_request'
+    uses: SirLocke/ai-runner-workflows/.github/workflows/reusable-ai-triage.yml@main
+    secrets: inherit
