@@ -136,13 +136,16 @@ def detect_beat_durations(music: Path, cut_cfg: Mapping[str, Any]) -> list[float
     if not intervals:
         return []
     median_beat = float(statistics.median(intervals))
-    group = max(1, int(round(median_beat / target)))
+    if median_beat <= 0:
+        return []
+    group = max(1, int(round(target / median_beat)))
+    cut_len = median_beat * group
     log.info(
         "Beat-Grid: Tempo ~%.0f BPM, Beat-Abstand %.2fs -> Gruppe %d (Cut ~%.2fs)",
         60.0 / median_beat if median_beat else 0.0,
         median_beat,
         group,
-        median_beat * group,
+        cut_len,
     )
 
     grid = beats[::group]
@@ -153,7 +156,7 @@ def detect_beat_durations(music: Path, cut_cfg: Mapping[str, Any]) -> list[float
             continue
         durations.append(min(max(span, t_min), t_max))
     if not durations:
-        durations = [min(max(median_beat * group, t_min), t_max)]
+        durations = [min(max(cut_len, t_min), t_max)]
     return durations
 
 
@@ -1449,6 +1452,31 @@ def _apply_audio_override(cfg: dict[str, Any], audio: bool | None) -> None:
     video["audio"] = bool(audio)
 
 
+def group_clips_by_day(clips: Sequence[ClipInfo], merge_days: bool = False) -> dict[str, list[ClipInfo]]:
+    """Gruppiert Clips nach Aufnahmetag - oder bündelt sie in einer Gruppe.
+
+    Standard: ein Reel pro Tag, damit ``output/<trip>/<tag>/`` wirklich nur
+    Material dieses Tages enthält. Mit ``merge_days`` (CLI ``--single-reel``)
+    landen alle Clips bewusst in *einem* Reel. Der Gruppenname wird dann zu
+    einem Tagesbereich (``2026-09-27_2026-09-30``), damit die Ablage weiter
+    erkennbar bleibt; ohne brauchbares Datum bleibt ``_ohne-datum``.
+    """
+    if not merge_days:
+        groups: dict[str, list[ClipInfo]] = {}
+        for clip in clips:
+            groups.setdefault(clip.date_label or "_ohne-datum", []).append(clip)
+        return groups
+
+    labels = sorted({c.date_label for c in clips if c.date_label})
+    if not labels:
+        label = "_ohne-datum"
+    elif len(labels) == 1:
+        label = labels[0]
+    else:
+        label = f"{labels[0]}_{labels[-1]}"
+    return {label: list(clips)}
+
+
 def run(
     sources: Sequence[str | Path],
     *,
@@ -1467,6 +1495,7 @@ def run(
     lossless: bool = False,
     audio: bool | None = None,
     bpm: float | None = None,
+    merge_days: bool = False,
 ) -> RenderResult:
     """Kompletter Pipeline-Lauf: Metadaten -> Schnitt -> Render -> Export.
 
@@ -1627,15 +1656,19 @@ def run(
         base_out = ensure_dir(base_out)
 
     # Clips nach Aufnahmetag gruppieren: jeder Tag wird ein eigenes Reel in
-    # <trip>/<tag>/. Clips ohne Datum landen gemeinsam in "_ohne-datum".
-    groups: dict[str, list[ClipInfo]] = {}
-    for clip in usable:
-        groups.setdefault(clip.date_label or "_ohne-datum", []).append(clip)
+    # <trip>/<tag>/. Mit --single-reel wird stattdessen bewusst alles in einem
+    # Reel gebündelt (Mehrfachauswahl mehrerer Tage im Homelab).
+    groups = group_clips_by_day(usable, merge_days=merge_days)
     if len(groups) > 1:
         log.info(
             "Material verteilt sich auf %d Tage: %s",
             len(groups),
             ", ".join(f"{k} ({len(v)} Dateien)" for k, v in sorted(groups.items())),
+        )
+    elif merge_days:
+        log.info(
+            "Tage werden in einem Reel zusammengefasst: %s",
+            next(iter(groups), ""),
         )
 
     grade_obj = GradeConfig.from_config(cfg, preset=grade)
@@ -2016,6 +2049,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Expliziter BPM-Wert (überschreibt cut.fallback_bpm)",
     )
+    parser.add_argument(
+        "--single-reel",
+        "--merge-days",
+        dest="merge_days",
+        action="store_true",
+        help="alle Clips in EIN Reel bündeln statt eines Reels pro Aufnahmetag",
+    )
     audio_group = parser.add_mutually_exclusive_group()
     audio_group.add_argument(
         "--audio",
@@ -2072,6 +2112,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         lossless=args.lossless,
         audio=args.audio,
         bpm=args.bpm,
+        merge_days=args.merge_days,
     )
 
     if args.json:

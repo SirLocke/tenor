@@ -1133,6 +1133,8 @@ def test_detect_beat_durations_median_calculation(tmp_path: Path) -> None:
 
     assert len(durations) > 0
     assert all(1.4 <= d <= 2.0 for d in durations)
+    # 120 BPM (beat 0.5s), target 1.7 -> group round(1.7/0.5)=3 -> cut 1.5s
+    assert any(abs(d - 1.5) < 1e-6 for d in durations)
 
 
 @patch("src.spotify_beats.get_token")
