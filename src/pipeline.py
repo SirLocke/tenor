@@ -531,7 +531,7 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
         if tmp_path is not None:
             tmp_path.unlink(missing_ok=True)
             tmp_path = None
-    except Exception:
+    except BaseException:
         if tmp_path is not None:
             tmp_path.unlink(missing_ok=True)
             tmp_path = None
@@ -1877,6 +1877,8 @@ def export_reel(
             "ffmpeg_params": ffmpeg_params,
             "logger": None,
         }
+        temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
+
         if write_kwargs["audio"]:
             # Nur wenn wirklich eine Spur mitkommt: sonst würde moviepy eine
             # leere Audiodatei erzeugen und -copy in den Container muxen.
@@ -1886,6 +1888,7 @@ def export_reel(
             write_kwargs["audio_bitrate"] = str(video_cfg.get("audio_bitrate", "192k"))
             write_kwargs["audio_fps"] = int(video_cfg.get("audio_sample_rate", 44100))
             write_kwargs["audio_nbytes"] = int(video_cfg.get("audio_nbytes", 2))
+            write_kwargs["temp_audiofile"] = str(temp_audio)
 
         if dry_run:
             log.info("DRY-RUN: Rendere Video-Frames ohne Export")
@@ -1902,6 +1905,10 @@ def export_reel(
         _attempt_export(bool(video_cfg.get("lossless")))
     except Exception as exc:
         partial.unlink(missing_ok=True)
+        temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
+        temp_audio.unlink(missing_ok=True)
+        for bc in partial.parent.glob("*.beat-cache"):
+            bc.unlink(missing_ok=True)
         if bool(video_cfg.get("lossless")):
             log.warning("Lossless-Export fehlgeschlagen, versuche Standard-Export: %s", exc)
             try:
@@ -1909,6 +1916,9 @@ def export_reel(
             except Exception as exc2:
                 log.exception("Export nach %s fehlgeschlagen: %s", partial, exc2)
                 partial.unlink(missing_ok=True)
+                temp_audio.unlink(missing_ok=True)
+                for bc in partial.parent.glob("*.beat-cache"):
+                    bc.unlink(missing_ok=True)
                 if errors_seen is not None:
                     errors_seen.append(f"Export fehlgeschlagen: {exc2}")
                 return None
@@ -1920,11 +1930,17 @@ def export_reel(
     except BaseException:
         # SIGTERM/Stromausfall: unfertige Datei nicht liegen lassen
         partial.unlink(missing_ok=True)
+        temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
+        temp_audio.unlink(missing_ok=True)
+        for bc in partial.parent.glob("*.beat-cache"):
+            bc.unlink(missing_ok=True)
         raise
     finally:
         _close_all([final])
         _close_all(getattr(final, "tenor_sources", []) or [])
         _close_all([getattr(final, "tenor_music_reader", None)])
+        temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
+        temp_audio.unlink(missing_ok=True)
 
     if not dry_run:
         partial.replace(target)
