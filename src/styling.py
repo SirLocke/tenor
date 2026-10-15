@@ -337,26 +337,38 @@ def _ensure_font(kind: str, target: Path) -> bool:
     return False
 
 
-def resolve_font_path(cfg: Mapping[str, Any], kind: str) -> Path | None:
-    """Findet (oder lädt) die passende Font-Datei für ``bold``/``regular``/``mono``."""
-    configured = get(cfg, f"fonts.{kind}")
+@lru_cache(maxsize=32)
+def _resolve_font_path_cached(
+    configured: str | None,
+    auto_download: bool,
+    fallbacks: tuple[str, ...],
+    kind: str,
+) -> Path | None:
     if configured:
         candidate = expand_path(configured)
         if candidate.is_file():
             return candidate
-        if (
-            bool(get(cfg, "fonts.auto_download", True))
-            and kind in FONT_URLS
-            and _ensure_font(kind, candidate)
-        ):
+        if auto_download and kind in FONT_URLS and _ensure_font(kind, candidate):
             return candidate
 
-    fallbacks = get(cfg, "fonts.system_fallbacks", []) or []
     for fallback in fallbacks:
         path = Path(str(fallback)).expanduser()
         if path.is_file():
             return path
     return None
+
+
+def resolve_font_path(cfg: Mapping[str, Any], kind: str) -> Path | None:
+    """Findet (oder lädt) die passende Font-Datei für ``bold``/``regular``/``mono``."""
+    configured_raw = get(cfg, f"fonts.{kind}")
+    configured = str(configured_raw) if configured_raw is not None else None
+
+    auto_download = bool(get(cfg, "fonts.auto_download", True))
+
+    fallbacks_raw = get(cfg, "fonts.system_fallbacks", []) or []
+    fallbacks = tuple(str(f) for f in fallbacks_raw)
+
+    return _resolve_font_path_cached(configured, auto_download, fallbacks, kind)
 
 
 @lru_cache(maxsize=32)
