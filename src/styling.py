@@ -337,8 +337,10 @@ def _ensure_font(kind: str, target: Path) -> bool:
     return False
 
 
-@lru_cache(maxsize=32)
-def _resolve_font_path_cached(
+_font_path_cache: dict[tuple[str | None, bool, tuple[str, ...], str], Path] = {}
+
+
+def _resolve_font_path_impl(
     configured: str | None,
     auto_download: bool,
     fallbacks: tuple[str, ...],
@@ -368,7 +370,19 @@ def resolve_font_path(cfg: Mapping[str, Any], kind: str) -> Path | None:
     fallbacks_raw = get(cfg, "fonts.system_fallbacks", []) or []
     fallbacks = tuple(str(f) for f in fallbacks_raw)
 
-    return _resolve_font_path_cached(configured, auto_download, fallbacks, kind)
+    cache_key = (configured, auto_download, fallbacks, kind)
+    if cache_key in _font_path_cache:
+        return _font_path_cache[cache_key]
+
+    result = _resolve_font_path_impl(configured, auto_download, fallbacks, kind)
+    if result is not None:
+        _font_path_cache[cache_key] = result
+        if len(_font_path_cache) > 100:
+            # Simple eviction to prevent unbounded growth in edge cases
+            _font_path_cache.clear()
+            _font_path_cache[cache_key] = result
+
+    return result
 
 
 @lru_cache(maxsize=32)
