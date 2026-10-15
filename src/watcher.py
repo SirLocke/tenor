@@ -367,6 +367,8 @@ class IngestProcessor:
             if self._stop.is_set():
                 return
             self._await_batch_window()
+            if self._stop.is_set():
+                return
             with self._lock:
                 batch = sorted(self._pending)
                 self._pending.clear()
@@ -501,6 +503,19 @@ class IngestProcessor:
     def request_stop(self) -> None:
         self._stop.set()
 
+    def wait_for_renders(self) -> None:
+        """Blockiert, bis alle laufenden Pipeline-Exporte abgeschlossen sind."""
+        reported = False
+        while True:
+            with self._lock:
+                active = len(self._inflight)
+            if not active:
+                break
+            if not reported:
+                log.info("Warte auf %d laufende Exporte (Graceful Shutdown)...", active)
+                reported = True
+            time.sleep(1.0)
+
     def cleanup_partials(self) -> int:
         """Entfernt ``*.part.<ext>`` aus dem Output - Reste abgebrochener Läufe.
 
@@ -628,6 +643,7 @@ def watch(cfg: Mapping[str, Any], *, config_path: str | None = None, once: bool 
     finally:
         observer.stop()
         observer.join(timeout=30)
+        processor.wait_for_renders()
         log.info("Watcher beendet")
     return 0
 
