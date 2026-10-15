@@ -42,7 +42,12 @@ def test_wait_for_renders_blocks_and_unblocks():
 
 
 def test_settle_and_collect_returns_early_on_stop():
-    cfg = {"ingest_dir": "test_ingest", "output_dir": "test_out", "watcher.batch_window": 0.5, "watcher.debounce_seconds": 0}
+    cfg = {
+        "ingest_dir": "test_ingest",
+        "output_dir": "test_out",
+        "watcher.batch_window": 0.5,
+        "watcher.debounce_seconds": 0,
+    }
     processor = IngestProcessor(cfg)
 
     # Mock some methods to trace behavior
@@ -60,6 +65,7 @@ def test_settle_and_collect_returns_early_on_stop():
     # process_batch isn't called.
     # Actually wait_until_stable checks file existance. We should mock it.
     import unittest.mock
+
     with unittest.mock.patch("src.watcher.wait_until_stable", return_value=True):
         processor._settle_and_collect(Path("dummy.mp4"))
 
