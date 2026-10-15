@@ -1,10 +1,9 @@
-import pytest
 import threading
 import time
 from pathlib import Path
-from unittest.mock import MagicMock
 
 from src.watcher import IngestProcessor
+
 
 def test_wait_for_renders_blocks_and_unblocks():
     # Setup mock config and processor
