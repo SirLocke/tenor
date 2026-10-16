@@ -411,7 +411,7 @@ def setup_logging(cfg: Mapping[str, Any] | None = None, *, quiet: bool = False) 
             file_handler = logging.FileHandler(target, encoding="utf-8")
             file_handler.setFormatter(logging.Formatter(fmt))
             root.addHandler(file_handler)
-        except OSError as exc:  # Logdatei darf den Lauf nie killen
+        except (OSError, ValueError) as exc:  # Logdatei darf den Lauf nie killen
             root.warning("Logdatei nicht schreibbar (%s): %s", log_file, exc)
 
     root.propagate = False
