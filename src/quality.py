@@ -923,6 +923,7 @@ def plan_windows(
             if len(basis) >= cfg.duplicate_memory:
                 break
 
+        # O(1) set lookup for membership testing when deduplicating search offsets
         seen: set[float] = set()
         for offset in (0.0, *cfg.search_offsets):
             candidate = clamp_start(start + offset, length, source_duration, edge_trim)
