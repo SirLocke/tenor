@@ -404,7 +404,7 @@ def is_valid_video(path: Path) -> bool:
         ]
         if path.suffix.lower() in RAW_VIDEO_SUFFIXES:
             cmd.extend(["-f", "hevc"])
-        cmd.append(str(path))
+        cmd.extend(["--", str(path)])
 
         result = subprocess.run(
             cmd,
@@ -436,6 +436,7 @@ def has_audio_stream(path: Path) -> bool:
                 "stream=codec_type",
                 "-of",
                 "csv=p=0",
+                "--",
                 str(path),
             ],
             capture_output=True,
@@ -464,6 +465,7 @@ def probe_duration(path: Path) -> float | None:
                 "format=duration",
                 "-of",
                 "default=nw=1:nk=1",
+                "--",
                 str(path),
             ],
             capture_output=True,
@@ -509,6 +511,7 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
         "stream=pix_fmt,codec_name",
         "-of",
         "csv=p=0",
+        "--",
         str(path),
     ]
     tmp_path: Path | None = None
