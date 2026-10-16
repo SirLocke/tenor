@@ -388,6 +388,7 @@ def build_segments(
 # Rendering
 def is_valid_video(path: Path) -> bool:
     from .metadata import FFPROBE, FFPROBE_TIMEOUT, RAW_VIDEO_SUFFIXES
+
     """Prüft mit ffprobe, ob eine Videodatei lesbar und nicht korrupt ist."""
     try:
         cmd = [
@@ -414,6 +415,8 @@ def is_valid_video(path: Path) -> bool:
         return "video" in result.stdout.decode().strip()
     except (subprocess.SubprocessError, OSError, ValueError):
         return False
+
+
 def has_audio_stream(path: Path) -> bool:
     """Prüft, ob die fertige Datei wirklich eine Tonspur enthält.
 

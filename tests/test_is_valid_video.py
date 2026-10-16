@@ -22,6 +22,7 @@ def test_is_valid_video_exception(mock_run):
     mock_run.side_effect = subprocess.SubprocessError
     assert is_valid_video(Path("test.mp4")) is False
 
+
 @patch("subprocess.run")
 def test_is_valid_video_hevc(mock_run):
     mock_run.return_value = MagicMock(stdout=b"video\n")
