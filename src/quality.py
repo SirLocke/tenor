@@ -35,6 +35,7 @@ import logging
 import math
 import os
 import subprocess
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -226,10 +227,20 @@ def _strip_size(width: int, height: int) -> tuple[int, int]:
     return scaled_width, STRIP_HEIGHT
 
 
-def _extract_strip(
+def _empty_stats() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    return (
+        np.zeros(0, dtype=np.float32),
+        np.zeros(0, dtype=np.float32),
+        np.zeros(0, dtype=np.float32),
+        np.zeros(0, dtype=np.float32),
+        np.zeros((0, SIGNATURE_SIZE * SIGNATURE_SIZE), dtype=np.float32),
+    )
+
+
+def _extract_and_score_strip(
     path: Path, width: int, height: int, sample_fps: float, timeout: float
-) -> tuple[np.ndarray, str | None]:
-    """Ein ffmpeg-Durchlauf: Graustufen-Strip als rohe Bytes."""
+) -> tuple[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray], str | None]:
+    """Ein ffmpeg-Durchlauf, der in Batches dekodiert und bewertet, um RAM zu sparen."""
     strip_w, strip_h = _strip_size(width, height)
     cmd = [
         "ffmpeg",
@@ -250,46 +261,101 @@ def _extract_strip(
         "-",
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except FileNotFoundError:
-        return np.zeros(0, dtype=np.uint8), "ffmpeg nicht gefunden"
-    except subprocess.TimeoutExpired:
-        return np.zeros(0, dtype=np.uint8), f"ffmpeg-Timeout nach {timeout:.0f}s"
+        return _empty_stats(), "ffmpeg nicht gefunden"
 
     frame_size = strip_w * strip_h
-    if proc.returncode != 0 or frame_size <= 0:
-        detail = proc.stderr.decode("utf-8", "replace").strip()[:200]
-        return np.zeros(0, dtype=np.uint8), detail or f"ffmpeg rc={proc.returncode}"
+    batch_frames = 64
 
-    raw = proc.stdout
-    count = len(raw) // frame_size
-    if count == 0:
-        return np.zeros(0, dtype=np.uint8), "keine Frames dekodiert"
-    return np.frombuffer(raw[: count * frame_size], dtype=np.uint8).reshape(count, strip_h, strip_w), None
+    timeout_expired = False
+    def kill_proc() -> None:
+        nonlocal timeout_expired
+        timeout_expired = True
+        proc.kill()
 
+    timer = threading.Timer(timeout, kill_proc)
+    timer.start()
 
-def _stats_from_strip(strip: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Pro Frame: Schärfe, Luma, Schwarz-/Weißanteil, Signatur."""
-    count = strip.shape[0]
-    sharpness = np.zeros(count, dtype=np.float32)
-    luma = np.zeros(count, dtype=np.float32)
-    black = np.zeros(count, dtype=np.float32)
-    white = np.zeros(count, dtype=np.float32)
-    signatures = np.zeros((count, SIGNATURE_SIZE * SIGNATURE_SIZE), dtype=np.float32)
+    all_sharpness = []
+    all_luma = []
+    all_black = []
+    all_white = []
+    all_signatures = []
 
-    for index in range(count):
-        frame = strip[index]
-        # Calculate Laplacian variance on the 160x90 strip frame. Downscaling further
-        # (e.g. to 16x16) acts as a strong low-pass filter and breaks the calibrated thresholds.
-        laplacian = cv2.Laplacian(frame, cv2.CV_32F, ksize=3)
-        sharpness[index] = float(laplacian.var())
-        luma[index] = float(frame.mean())
-        black[index] = float((frame < 16).mean())
-        white[index] = float((frame > 240).mean())
-        small = cv2.resize(frame, (SIGNATURE_SIZE, SIGNATURE_SIZE), interpolation=cv2.INTER_AREA)
-        signatures[index] = small.astype(np.float32).ravel()
+    buffer = bytearray()
 
-    return sharpness, luma, black, white, signatures
+    def process_batch(frames: np.ndarray) -> None:
+        count = frames.shape[0]
+        sharpness = np.zeros(count, dtype=np.float32)
+        luma = np.zeros(count, dtype=np.float32)
+        black = np.zeros(count, dtype=np.float32)
+        white = np.zeros(count, dtype=np.float32)
+        signatures = np.zeros((count, SIGNATURE_SIZE * SIGNATURE_SIZE), dtype=np.float32)
+
+        for index in range(count):
+            frame = frames[index]
+            laplacian = cv2.Laplacian(frame, cv2.CV_32F, ksize=3)
+            sharpness[index] = float(laplacian.var())
+            luma[index] = float(frame.mean())
+            black[index] = float((frame < 16).mean())
+            white[index] = float((frame > 240).mean())
+            small = cv2.resize(frame, (SIGNATURE_SIZE, SIGNATURE_SIZE), interpolation=cv2.INTER_AREA)
+            signatures[index] = small.astype(np.float32).ravel()
+
+        all_sharpness.append(sharpness)
+        all_luma.append(luma)
+        all_black.append(black)
+        all_white.append(white)
+        all_signatures.append(signatures)
+
+    try:
+        while True:
+            chunk = proc.stdout.read(65536)
+            if not chunk:
+                break
+            buffer.extend(chunk)
+
+            count = len(buffer) // frame_size
+            if count >= batch_frames:
+                bytes_to_process = count * frame_size
+                raw = buffer[:bytes_to_process]
+                del buffer[:bytes_to_process]
+
+                frames = np.frombuffer(raw, dtype=np.uint8).reshape(count, strip_h, strip_w)
+                process_batch(frames)
+
+        count = len(buffer) // frame_size
+        if count > 0:
+            bytes_to_process = count * frame_size
+            raw = buffer[:bytes_to_process]
+            del buffer[:bytes_to_process]
+
+            frames = np.frombuffer(raw, dtype=np.uint8).reshape(count, strip_h, strip_w)
+            process_batch(frames)
+
+    finally:
+        timer.cancel()
+        proc.kill()
+        proc.wait()
+
+    if timeout_expired:
+        return _empty_stats(), f"ffmpeg-Timeout nach {timeout:.0f}s"
+
+    if proc.returncode != 0 and len(all_sharpness) == 0:
+        detail = proc.stderr.read().decode("utf-8", "replace").strip()[:200]
+        return _empty_stats(), detail or f"ffmpeg rc={proc.returncode}"
+
+    if len(all_sharpness) == 0:
+        return _empty_stats(), "keine Frames dekodiert"
+
+    res_sharpness = np.concatenate(all_sharpness)
+    res_luma = np.concatenate(all_luma)
+    res_black = np.concatenate(all_black)
+    res_white = np.concatenate(all_white)
+    res_signatures = np.concatenate(all_signatures)
+
+    return (res_sharpness, res_luma, res_black, res_white, res_signatures), None
 
 
 def _cache_key(path: Path, cfg: QualityConfig) -> str:
@@ -388,22 +454,23 @@ def analyse_clip(
         log.debug("Qualitäts-Cache hit: %s (%d Frames)", path.name, analysis.luma.size)
         return analysis
 
-    strip, error = _extract_strip(path, width, height, config.sample_fps, config.timeout)
+    stats, error = _extract_and_score_strip(path, width, height, config.sample_fps, config.timeout)
+    sharpness, luma, black, white, signatures = stats
+
     if error:
         log.warning("Qualitätsanalyse für %s fehlgeschlagen: %s", path.name, error)
         return ClipAnalysis(
             path=path,
             duration=duration,
             sample_fps=config.sample_fps,
-            sharpness=np.zeros(0, dtype=np.float32),
-            luma=np.zeros(0, dtype=np.float32),
-            black_ratio=np.zeros(0, dtype=np.float32),
-            white_ratio=np.zeros(0, dtype=np.float32),
-            signatures=np.zeros((0, SIGNATURE_SIZE * SIGNATURE_SIZE), dtype=np.float32),
+            sharpness=sharpness,
+            luma=luma,
+            black_ratio=black,
+            white_ratio=white,
+            signatures=signatures,
             error=error,
         )
 
-    sharpness, luma, black, white, signatures = _stats_from_strip(strip)
     analysis = ClipAnalysis(
         path=path,
         duration=duration,
