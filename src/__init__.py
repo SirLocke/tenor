@@ -273,7 +273,11 @@ def _coerce(value: str, template: Any) -> Any:
         except ValueError:
             return value
     if isinstance(template, list):
-        return [part.strip() for part in value.split(",") if part.strip()]
+        parts = [part.strip() for part in value.split(",") if part.strip()]
+        if template:
+            item_template = template[0]
+            return [_coerce(part, item_template) for part in parts]
+        return parts
     return value
 
 
