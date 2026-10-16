@@ -8,6 +8,7 @@ from unittest.mock import patch
 from pytest import approx
 from src.metadata import (
     ClipInfo,
+    Geocoder,
     _collect_tags,
     dominant_place,
     parse_coordinates,
@@ -163,3 +164,11 @@ def test_primary_place():
     # Edge cases with leading commas or empty first component
     assert primary_place(", Madeira") is None
     assert primary_place("  , Funchal") is None
+
+
+def test_geocoder_load_cache_file_not_found(tmp_path):
+    """Test Geocoder._load_cache when cache_file does not exist (FileNotFoundError)."""
+    non_existent_cache = tmp_path / "non_existent_dir" / "cache.json"
+    cfg = {"geocoding": {"cache_file": str(non_existent_cache)}}
+    geocoder = Geocoder(cfg)
+    assert geocoder._cache == {}
