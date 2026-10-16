@@ -387,31 +387,33 @@ def build_segments(
 # --------------------------------------------------------------------------- #
 # Rendering
 def is_valid_video(path: Path) -> bool:
+    from .metadata import FFPROBE, FFPROBE_TIMEOUT, RAW_VIDEO_SUFFIXES
     """Prüft mit ffprobe, ob eine Videodatei lesbar und nicht korrupt ist."""
     try:
+        cmd = [
+            FFPROBE,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "csv=p=0",
+        ]
+        if path.suffix.lower() in RAW_VIDEO_SUFFIXES:
+            cmd.extend(["-f", "hevc"])
+        cmd.append(str(path))
+
         result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=codec_type",
-                "-of",
-                "csv=p=0",
-                str(path),
-            ],
+            cmd,
             capture_output=True,
-            timeout=15,
+            timeout=FFPROBE_TIMEOUT,
             check=True,
         )
         return "video" in result.stdout.decode().strip()
     except (subprocess.SubprocessError, OSError, ValueError):
         return False
-
-
-# --------------------------------------------------------------------------- #
 def has_audio_stream(path: Path) -> bool:
     """Prüft, ob die fertige Datei wirklich eine Tonspur enthält.
 
@@ -1601,15 +1603,18 @@ def run(
     for c in clips:
         if c.duration < min_source:
             continue
+        if c.error:
+            log.warning("Datei übersprungen (Metadaten-Fehler): %s - %s", c.path, c.error)
+            continue
         if not is_valid_video(c.path):
             log.warning("Datei übersprungen (korrupt oder nicht lesbar): %s", c.path)
             continue
         usable.append(c)
     skipped = len(clips) - len(usable)
     if skipped:
-        log.info("%d Datei(en) übersprungen (zu kurz oder korrupt)", skipped)
+        log.info("%d Datei(en) übersprungen (kürzer als %.1fs oder korrupt)", skipped, min_source)
     if not usable:
-        log.error("Alle Eingaben sind ungültig (zu kurz oder korrupt)")
+        log.error("Alle Eingaben sind ungültig (kürzer als %.1fs oder korrupt)", min_source)
         return result
 
     place = dominant_place(usable)
