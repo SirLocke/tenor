@@ -260,12 +260,15 @@ def _extract_and_score_strip(
         "rawvideo",
         "-",
     ]
+    frame_size = strip_w * strip_h
+    if frame_size <= 0:
+        return _empty_stats(), "invalid strip size"
+
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except FileNotFoundError:
         return _empty_stats(), "ffmpeg nicht gefunden"
 
-    frame_size = strip_w * strip_h
     batch_frames = 64
 
     timeout_expired = False
@@ -310,6 +313,15 @@ def _extract_and_score_strip(
         all_white.append(white)
         all_signatures.append(signatures)
 
+    stderr_output = []
+
+    def read_stderr() -> None:
+        if proc.stderr:
+            stderr_output.append(proc.stderr.read())
+
+    stderr_thread = threading.Thread(target=read_stderr)
+    stderr_thread.start()
+
     try:
         while True:
             chunk = proc.stdout.read(65536)
@@ -339,12 +351,14 @@ def _extract_and_score_strip(
         timer.cancel()
         proc.kill()
         proc.wait()
+        stderr_thread.join()
 
     if timeout_expired:
         return _empty_stats(), f"ffmpeg-Timeout nach {timeout:.0f}s"
 
     if proc.returncode != 0 and len(all_sharpness) == 0:
-        detail = proc.stderr.read().decode("utf-8", "replace").strip()[:200]
+        err_bytes = stderr_output[0] if stderr_output else b""
+        detail = err_bytes.decode("utf-8", "replace").strip()[:200]
         return _empty_stats(), detail or f"ffmpeg rc={proc.returncode}"
 
     if len(all_sharpness) == 0:
