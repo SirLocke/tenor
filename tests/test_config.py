@@ -1,6 +1,9 @@
 from __future__ import annotations
+
 import os
-from src import _coerce, _apply_env_overrides
+
+from src import _apply_env_overrides, _coerce
+
 
 def test_coerce_list():
     assert _coerce("1.0, -1.0, 2.0", [0.3]) == [1.0, -1.0, 2.0]
@@ -8,6 +11,7 @@ def test_coerce_list():
     assert _coerce("1, 2, 3", [1]) == [1, 2, 3]
     assert _coerce("true, false, 1", [True]) == [True, False, True]
     assert _coerce("a, b", []) == ["a", "b"]
+
 
 def test_apply_env_overrides_list():
     cfg = {"test_list": [0.1, 0.2]}
