@@ -269,6 +269,7 @@ def _extract_and_score_strip(
     batch_frames = 64
 
     timeout_expired = False
+
     def kill_proc() -> None:
         nonlocal timeout_expired
         timeout_expired = True
