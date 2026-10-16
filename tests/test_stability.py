@@ -41,6 +41,7 @@ from src.watcher import (  # noqa: E402
     IngestHandler,
     IngestProcessor,
     WatcherState,
+    get_stat,
     size_stable,
     wait_until_stable,
 )
@@ -210,6 +211,46 @@ def test_state_no_temp_files_left_behind(tmp_path: Path) -> None:
         state.save()
     leftovers = [p.name for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
     assert leftovers == []
+
+
+# --------------------------------------------------------------------------- #
+# get_stat
+# --------------------------------------------------------------------------- #
+def test_get_stat_success(tmp_path: Path) -> None:
+    clip = tmp_path / "clip.mov"
+    clip.touch()
+    stat_res = get_stat(clip)
+    assert isinstance(stat_res, os.stat_result)
+
+
+def test_get_stat_file_not_found_raises_immediately(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.mov"
+    with patch("time.sleep") as mock_sleep:
+        with pytest.raises(FileNotFoundError):
+            get_stat(missing, retries=3, delay=0.1)
+    mock_sleep.assert_not_called()
+
+
+def test_get_stat_oserror_retry_success(tmp_path: Path) -> None:
+    clip = tmp_path / "transient.mov"
+    clip.touch()
+    real_stat = clip.stat()
+
+    with patch.object(Path, "stat", side_effect=[OSError("Err 1"), OSError("Err 2"), real_stat]), patch("time.sleep") as mock_sleep:
+        res = get_stat(clip, retries=3, delay=0.1)
+        assert res == real_stat
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_called_with(0.1)
+
+
+def test_get_stat_oserror_retry_failure(tmp_path: Path) -> None:
+    clip = tmp_path / "persistent.mov"
+    clip.touch()
+
+    with patch.object(Path, "stat", side_effect=OSError("Persistent Error")), patch("time.sleep") as mock_sleep:
+        with pytest.raises(OSError, match="Persistent Error"):
+            get_stat(clip, retries=3, delay=0.1)
+        assert mock_sleep.call_count == 2
 
 
 # --------------------------------------------------------------------------- #
