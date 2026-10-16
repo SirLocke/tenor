@@ -386,6 +386,31 @@ def build_segments(
 
 # --------------------------------------------------------------------------- #
 # Rendering
+def is_valid_video(path: Path) -> bool:
+    """Prüft mit ffprobe, ob eine Videodatei lesbar und nicht korrupt ist."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_type",
+                "-of",
+                "csv=p=0",
+                str(path),
+            ],
+            capture_output=True,
+            timeout=15,
+            check=True,
+        )
+        return "video" in result.stdout.decode().strip()
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return False
+
+
 # --------------------------------------------------------------------------- #
 def has_audio_stream(path: Path) -> bool:
     """Prüft, ob die fertige Datei wirklich eine Tonspur enthält.
@@ -1572,12 +1597,19 @@ def run(
         return result
 
     min_source = float(get(cfg, "watcher.min_clip_duration", 0.0) or 0.0)
-    usable = [c for c in clips if c.duration >= min_source]
+    usable: list[ClipInfo] = []
+    for c in clips:
+        if c.duration < min_source:
+            continue
+        if not is_valid_video(c.path):
+            log.warning("Datei übersprungen (korrupt oder nicht lesbar): %s", c.path)
+            continue
+        usable.append(c)
     skipped = len(clips) - len(usable)
     if skipped:
-        log.info("%d Datei(en) kürzer als %.1fs - übersprungen", skipped, min_source)
+        log.info("%d Datei(en) übersprungen (zu kurz oder korrupt)", skipped)
     if not usable:
-        log.error("Alle Eingaben sind kürzer als %.1fs", min_source)
+        log.error("Alle Eingaben sind ungültig (zu kurz oder korrupt)")
         return result
 
     place = dominant_place(usable)
