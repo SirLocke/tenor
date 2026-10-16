@@ -237,6 +237,18 @@ def _empty_stats() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.n
     )
 
 
+def _safe_path(path: Path | str) -> str:
+    """Konvertiert einen Pfad in einen String und verhindert Option-Injection in CLI-Befehlen.
+
+    Pfade, die mit einem Bindestrich ('-') beginnen, werden mit './' präfigiert,
+    damit Werkzeuge wie ffmpeg sie als Dateipfad und nicht als CLI-Option interpretieren.
+    """
+    s = str(path)
+    if s.startswith("-"):
+        return f"./{s}"
+    return s
+
+
 def _extract_and_score_strip(
     path: Path, width: int, height: int, sample_fps: float, timeout: float
 ) -> tuple[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray], str | None]:
@@ -248,7 +260,7 @@ def _extract_and_score_strip(
         "error",
         "-nostdin",
         "-i",
-        str(path),
+        _safe_path(path),
         "-an",
         "-sn",
         "-dn",
