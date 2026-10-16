@@ -856,6 +856,7 @@ def test_extract_and_score_strip_option_injection(monkeypatch: pytest.MonkeyPatc
         raise FileNotFoundError("ffmpeg not found")
 
     from unittest.mock import MagicMock
+
     monkeypatch.setattr("subprocess.Popen", fake_popen)
 
     path = Path("-vf.mp4")
