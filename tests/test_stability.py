@@ -225,9 +225,8 @@ def test_get_stat_success(tmp_path: Path) -> None:
 
 def test_get_stat_file_not_found_raises_immediately(tmp_path: Path) -> None:
     missing = tmp_path / "missing.mov"
-    with patch("time.sleep") as mock_sleep:
-        with pytest.raises(FileNotFoundError):
-            get_stat(missing, retries=3, delay=0.1)
+    with patch("time.sleep") as mock_sleep, pytest.raises(FileNotFoundError):
+        get_stat(missing, retries=3, delay=0.1)
     mock_sleep.assert_not_called()
 
 
@@ -236,7 +235,10 @@ def test_get_stat_oserror_retry_success(tmp_path: Path) -> None:
     clip.touch()
     real_stat = clip.stat()
 
-    with patch.object(Path, "stat", side_effect=[OSError("Err 1"), OSError("Err 2"), real_stat]), patch("time.sleep") as mock_sleep:
+    with (
+        patch.object(Path, "stat", side_effect=[OSError("Err 1"), OSError("Err 2"), real_stat]),
+        patch("time.sleep") as mock_sleep,
+    ):
         res = get_stat(clip, retries=3, delay=0.1)
         assert res == real_stat
         assert mock_sleep.call_count == 2
@@ -247,7 +249,10 @@ def test_get_stat_oserror_retry_failure(tmp_path: Path) -> None:
     clip = tmp_path / "persistent.mov"
     clip.touch()
 
-    with patch.object(Path, "stat", side_effect=OSError("Persistent Error")), patch("time.sleep") as mock_sleep:
+    with (
+        patch.object(Path, "stat", side_effect=OSError("Persistent Error")),
+        patch("time.sleep") as mock_sleep,
+    ):
         with pytest.raises(OSError, match="Persistent Error"):
             get_stat(clip, retries=3, delay=0.1)
         assert mock_sleep.call_count == 2
