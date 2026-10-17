@@ -34,7 +34,6 @@ log = logging.getLogger("tenor.spotify")
 
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_ANALYSIS_URL = "https://api.spotify.com/v1/audio-analysis/{track_id}"
-SPOTIFY_TRACK_URL = "https://api.spotify.com/v1/tracks/{track_id}"
 
 TRACK_ID_RE = re.compile(r"(?:track[:/]|open\.spotify\.com/track/)([A-Za-z0-9]{22})")
 
@@ -224,21 +223,6 @@ def _auth_get(url: str, *, quota_locked: bool = False) -> Any | None:
             log.warning("Spotify-Antwort kein gültiges JSON: %s", exc)
             return None
     return None
-
-
-def track_name(track_uri: str) -> str | None:
-    """``artist - title`` für Logging/Beat-Source."""
-    track_id = extract_track_id(track_uri)
-    if not track_id:
-        return None
-    data = _auth_get(SPOTIFY_TRACK_URL.format(track_id=track_id))
-    if not isinstance(data, dict):
-        return None
-    title = str(data.get("name") or "").strip()
-    artists = data.get("artists") or []
-    names = [str(a.get("name", "")).strip() for a in artists if isinstance(a, dict)]
-    artist = ", ".join(n for n in names if n)
-    return f"{artist} - {title}" if artist and title else (title or None)
 
 
 def fetch_spotify_beats(track_uri: str) -> list[float] | None:

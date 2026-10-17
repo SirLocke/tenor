@@ -14,7 +14,6 @@ from src.spotify_beats import (
     extract_track_id,
     fetch_spotify_beats,
     get_token,
-    track_name,
 )
 
 
@@ -338,32 +337,6 @@ class TestAuthGet:
             mock_req_fn.return_value = mock_req
 
             assert _auth_get("https://api.spotify.com/v1/test") is None
-
-
-class TestTrackName:
-    """Tests for track_name."""
-
-    def test_track_name_invalid_uri(self) -> None:
-        assert track_name("invalid") is None
-
-    def test_track_name_success(self) -> None:
-        data = {
-            "name": "Song Title",
-            "artists": [{"name": "Artist 1"}, {"name": "Artist 2"}],
-        }
-        with patch("src.spotify_beats._auth_get", return_value=data):
-            res = track_name("4uLU612A35POGL3A3X3iie")
-            assert res == "Artist 1, Artist 2 - Song Title"
-
-    def test_track_name_title_only(self) -> None:
-        data = {"name": "Song Title", "artists": []}
-        with patch("src.spotify_beats._auth_get", return_value=data):
-            res = track_name("4uLU612A35POGL3A3X3iie")
-            assert res == "Song Title"
-
-    def test_track_name_non_dict_response(self) -> None:
-        with patch("src.spotify_beats._auth_get", return_value=None):
-            assert track_name("4uLU612A35POGL3A3X3iie") is None
 
 
 class TestFetchSpotifyBeats:
