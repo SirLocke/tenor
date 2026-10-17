@@ -79,7 +79,8 @@ def is_media(path: Path, extensions: Sequence[str]) -> bool:
 def size_stable(path: Path, checks: int = 2, poll: float = 1.0) -> bool:
     """True, wenn Dateigröße und -änderungszeit über ``checks`` Messungen konstant bleiben."""
     last: tuple[int, float] | None = None
-    for _ in range(max(checks, 1)):
+    total_checks = max(checks, 1)
+    for i in range(total_checks):
         try:
             stat = get_stat(path)
             current = (stat.st_size, stat.st_mtime)
@@ -88,7 +89,7 @@ def size_stable(path: Path, checks: int = 2, poll: float = 1.0) -> bool:
         if last is not None and current != last:
             return False
         last = current
-        if poll:
+        if poll and i < total_checks - 1:
             time.sleep(poll)
     return True
 
