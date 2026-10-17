@@ -149,6 +149,7 @@ def ffprobe_json(path: str | Path) -> dict[str, Any] | None:
         "json",
         "-show_format",
         "-show_streams",
+        "--",
         str(path),
     ]
     try:
@@ -495,7 +496,7 @@ def probe_clip(path: str | Path) -> ClipInfo:
                     ]
                     if Path(path).suffix.lower() in RAW_VIDEO_SUFFIXES:
                         count_cmd += ["-f", "hevc"]
-                    count_cmd.append(str(path))
+                    count_cmd.extend(["--", str(path)])
                     proc = subprocess.run(count_cmd, capture_output=True, timeout=30, check=False)
                     if proc.returncode == 0 and proc.stdout.strip():
                         frames = int(proc.stdout.strip())

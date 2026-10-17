@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from pytest import approx
 from src.metadata import (
@@ -11,6 +11,7 @@ from src.metadata import (
     Geocoder,
     _collect_tags,
     dominant_place,
+    ffprobe_json,
     parse_coordinates,
     primary_place,
     probe_clip,
@@ -172,3 +173,45 @@ def test_geocoder_load_cache_file_not_found(tmp_path):
     cfg = {"geocoding": {"cache_file": str(non_existent_cache)}}
     geocoder = Geocoder(cfg)
     assert geocoder._cache == {}
+
+
+@patch("subprocess.run")
+def test_ffprobe_json_option_injection_prevention(mock_run):
+    """Verify ffprobe_json passes '--' before the input file path."""
+    mock_run.return_value = MagicMock(returncode=0, stdout=b"{}")
+    malicious_path = Path("-help.mp4")
+    ffprobe_json(malicious_path)
+    mock_run.assert_called_once()
+    args, _ = mock_run.call_args
+    cmd = args[0]
+    assert "--" in cmd
+    dash_dash_idx = cmd.index("--")
+    assert cmd[dash_dash_idx + 1] == str(malicious_path)
+
+
+@patch("src.metadata.ffprobe_json")
+@patch("subprocess.run")
+def test_probe_clip_raw_bitstream_option_injection_prevention(mock_run, mock_ffprobe_json):
+    """Verify probe_clip raw bitstream frame counter passes '--' before the path."""
+    mock_ffprobe_json.return_value = {
+        "format": {},
+        "streams": [
+            {
+                "codec_type": "video",
+                "width": 1920,
+                "height": 1080,
+                "avg_frame_rate": "30/1",
+                "duration": "0.0",
+            }
+        ],
+    }
+    mock_run.return_value = MagicMock(returncode=0, stdout=b"300\n")
+    malicious_path = Path("-help.hevc")
+    clip = probe_clip(malicious_path)
+    mock_run.assert_called_once()
+    args, _ = mock_run.call_args
+    cmd = args[0]
+    assert "--" in cmd
+    dash_dash_idx = cmd.index("--")
+    assert cmd[dash_dash_idx + 1] == str(malicious_path)
+    assert clip.duration == 10.0
