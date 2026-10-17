@@ -41,6 +41,10 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      - dependency-name: "pillow"
+        update-types: ["version-update:semver-major"]
+
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
