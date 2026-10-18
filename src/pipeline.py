@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import logging
 import math
@@ -1803,6 +1804,31 @@ def run(
     return result
 
 
+def _compute_fingerprint(
+    segments: Sequence[Segment],
+    music: str | Path | None,
+    grade: GradeConfig,
+    title: str,
+    subtitle: str,
+) -> str:
+    """Berechnet einen eindeutigen Hash für diesen Export-Job (Quellen und Beat-Konfiguration)."""
+    payload = []
+    for s in segments:
+        try:
+            stat = s.clip.path.stat()
+            stamp = f"{s.clip.path.resolve()}|{stat.st_mtime:.3f}|{stat.st_size}|{s.start:.3f}|{s.end:.3f}"
+        except OSError:
+            stamp = f"{s.clip.path}|{s.start:.3f}|{s.end:.3f}"
+        payload.append(stamp)
+
+    payload.append(str(music))
+    payload.append(str(getattr(grade, "preset", "")))
+    payload.append(title)
+    payload.append(subtitle)
+
+    return hashlib.sha256("||".join(payload).encode("utf-8")).hexdigest()[:32]
+
+
 def export_reel(
     segments: Sequence[Segment],
     cfg: Mapping[str, Any],
@@ -1830,6 +1856,22 @@ def export_reel(
     if not dry_run:
         out_dir = ensure_dir(out_dir)
     log.info("Ausgabeordner: %s", out_dir)
+
+    fingerprint = _compute_fingerprint(segments, music, grade, title, subtitle)
+
+    if not dry_run:
+        for fp_file in out_dir.glob("*.fingerprint"):
+            try:
+                if fp_file.read_text().strip() == fingerprint:
+                    candidate = fp_file.with_suffix("")
+                    if candidate.exists() and is_valid_video(candidate):
+                        log.info(
+                            "Überspringe Export: Valides Video %s existiert bereits für dieselbe Quelle und Beat-Konfiguration.",
+                            candidate.name
+                        )
+                        return candidate
+            except OSError:
+                continue
 
     if dry_run:
         for segment in segments:
@@ -1987,6 +2029,10 @@ def export_reel(
 
     if not dry_run:
         partial.replace(target)
+        try:
+            target.with_suffix(f"{target.suffix}.fingerprint").write_text(fingerprint)
+        except OSError as exc:
+            log.warning("Konnte Fingerprint nicht schreiben: %s", exc)
         # Tatsächliche Dauer aus der fertigen Datei, nicht aus dem Plan: es
         # können Cuts ausgefallen sein.
         actual = probe_duration(target) or sum(s.duration for s in segments)
