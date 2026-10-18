@@ -1867,7 +1867,7 @@ def export_reel(
                     if candidate.exists() and is_valid_video(candidate):
                         log.info(
                             "Überspringe Export: Valides Video %s existiert bereits für dieselbe Quelle und Beat-Konfiguration.",
-                            candidate.name
+                            candidate.name,
                         )
                         return candidate
             except OSError:
