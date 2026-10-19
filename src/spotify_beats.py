@@ -23,12 +23,17 @@ zurückgefallen - die Pipeline läuft dann ohne Spotify weiter.
 
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
 import os
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Any
+
+from . import expand_path
 
 log = logging.getLogger("tenor.spotify")
 
@@ -87,6 +92,9 @@ class _TokenCache:
 
 
 _cache = _TokenCache()
+
+_beat_cache_lock = threading.Lock()
+CACHE_TTL = 7 * 24 * 3600
 
 
 def extract_track_id(uri: str) -> str | None:
@@ -225,12 +233,78 @@ def _auth_get(url: str, *, quota_locked: bool = False) -> Any | None:
     return None
 
 
-def fetch_spotify_beats(track_uri: str) -> list[float] | None:
+def _evict_stale(directory: Path, ttl: float) -> int:
+    """Entfernt abgelaufene oder ungültige Cache-Einträge.
+
+    Liest die JSON-Dateien und vergleicht `stored_at` (oder mtime) mit dem TTL.
+    Fehlerhafte Dateien werden gelöscht (werden beim nächsten Lauf neu geladen).
+    """
+    if not directory.is_dir():
+        return 0
+
+    now = time.time()
+    evicted = 0
+    for file in directory.glob("*.json"):
+        try:
+            with open(file, encoding="utf-8") as f:
+                data = json.load(f)
+            stored_at = float(data.get("stored_at", file.stat().st_mtime))
+            if now - stored_at > ttl:
+                file.unlink(missing_ok=True)
+                evicted += 1
+        except (ValueError, KeyError, TypeError, OSError, json.JSONDecodeError):
+            # Ungültige Datei: löschen und neu holen
+            file.unlink(missing_ok=True)
+            evicted += 1
+
+    if evicted > 0:
+        log.debug("Spotify-Beat-Cache: %d abgelaufene Einträge entfernt", evicted)
+    return evicted
+
+
+def fetch_spotify_beats(
+    track_uri: str,
+    *,
+    cache_dir: str | os.PathLike[str] | None = None,
+    ttl: float | None = None,
+) -> list[float] | None:
     """Beat-Startzeiten in Sekunden aus Spotify Audio Analysis."""
     track_id = extract_track_id(track_uri)
     if not track_id:
         log.warning("Ungültige Spotify-Referenz: %r", track_uri)
         return None
+
+    actual_cache_dir = Path(cache_dir) if cache_dir is not None else expand_path(".cache/spotify_beats")
+    actual_ttl = ttl if ttl is not None else CACHE_TTL
+    cache_file = actual_cache_dir / f"{track_id}.json"
+
+    with _beat_cache_lock:
+        try:
+            if cache_file.is_file():
+                with open(cache_file, encoding="utf-8") as f:
+                    cached_data = json.load(f)
+
+                stored_at = float(cached_data.get("stored_at", cache_file.stat().st_mtime))
+                if time.time() - stored_at <= actual_ttl:
+                    beats_hit = cached_data.get("beats")
+
+                    # Try to refresh the mtime/stored_at on hit
+                    try:
+                        cached_data["stored_at"] = time.time()
+                        temp_file = cache_file.with_name(f"{cache_file.name}.tmp")
+                        with open(temp_file, "w", encoding="utf-8") as f:
+                            json.dump(cached_data, f)
+                        temp_file.replace(cache_file)
+                    except OSError:
+                        pass  # Ignore if cache dir is read-only
+
+                    return beats_hit
+        except (ValueError, KeyError, TypeError, OSError, json.JSONDecodeError):
+            pass  # Invalid cache file, refetch
+
+        # Evict stale entries on miss
+        with contextlib.suppress(OSError):
+            _evict_stale(actual_cache_dir, actual_ttl)
 
     try:
         data = _auth_get(SPOTIFY_ANALYSIS_URL.format(track_id=track_id), quota_locked=True)
@@ -260,7 +334,28 @@ def fetch_spotify_beats(track_uri: str) -> list[float] | None:
             except (TypeError, ValueError):
                 tempo = 0.0
         log.info("Spotify: %d Beats, Tempo ~%.1f BPM für %s", len(beats), tempo, track_uri)
-        return beats or None
+
+        result = beats or None
+
+        if result:
+            with _beat_cache_lock:
+                try:
+                    actual_cache_dir.mkdir(parents=True, exist_ok=True)
+                    temp_file = cache_file.with_name(f"{cache_file.name}.tmp")
+                    with open(temp_file, "w", encoding="utf-8") as f:
+                        json.dump(
+                            {
+                                "stored_at": time.time(),
+                                "tempo": tempo,
+                                "beats": result,
+                            },
+                            f,
+                        )
+                    temp_file.replace(cache_file)
+                except OSError as exc:
+                    log.warning("Spotify-Beat-Cache nicht schreibbar: %s", exc)
+
+        return result
     except SpotifyAccessError:
         raise
     except Exception as exc:

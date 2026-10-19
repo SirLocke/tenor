@@ -1249,8 +1249,13 @@ def _fetch_spotify_beats(track_uri: str, cfg: Mapping[str, Any]) -> tuple[list[f
     except ImportError as exc:  # pragma: no cover
         log.warning("Spotify-Modul nicht verfügbar (%s)", exc)
         return None, f"Spotify-Modul nicht verfügbar ({exc})"
+
+    from . import expand_path
+
     try:
-        beats = fetch_spotify_beats(track_uri)
+        cache_dir = expand_path(spotify_cfg.get("cache_dir", ".cache/spotify_beats"))
+        ttl = float(spotify_cfg.get("cache_ttl", 604800))
+        beats = fetch_spotify_beats(track_uri, cache_dir=cache_dir, ttl=ttl)
     except SpotifyAccessError as exc:
         # Kein Konfigurationsfehler, sondern eine API-Sperre: einmal deutlich
         # benennen und dann auf die lokale Datei bzw. den BPM-Fallback

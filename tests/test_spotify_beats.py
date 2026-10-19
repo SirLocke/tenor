@@ -197,6 +197,15 @@ class TestGetToken:
             assert "Spotify-Token nicht erhältlich: 'access_token'" in caplog.text
 
 
+@pytest.fixture(autouse=True)
+def isolated_cache_dir(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Provide an isolated cache directory for all tests."""
+    cache_dir = tmp_path_factory.mktemp("spotify_beats_cache")
+    monkeypatch.setattr(
+        "src.spotify_beats.expand_path", lambda path: cache_dir if "spotify_beats" in path else path
+    )
+
+
 class TestAuthGet:
     """Tests for _auth_get."""
 
@@ -380,3 +389,84 @@ class TestFetchSpotifyBeats:
                 assert res is None
 
             assert "Fehler beim Abruf der Spotify-Beats: API connection failure" in caplog.text
+
+    def test_fetch_spotify_beats_cache_hit(self, tmp_path_factory: pytest.TempPathFactory) -> None:
+        cache_dir = tmp_path_factory.mktemp("cache_hit")
+        track_id = "4uLU612A35POGL3A3X3iie"
+        cache_file = cache_dir / f"{track_id}.json"
+
+        import json
+        import time
+
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump({"stored_at": time.time(), "tempo": 120.0, "beats": [1.0, 2.0, 3.0]}, f)
+
+        with patch("src.spotify_beats._auth_get") as mock_auth:
+            beats = fetch_spotify_beats(track_id, cache_dir=cache_dir)
+            assert beats == [1.0, 2.0, 3.0]
+            mock_auth.assert_not_called()
+
+    def test_fetch_spotify_beats_cache_eviction(self, tmp_path_factory: pytest.TempPathFactory) -> None:
+        cache_dir = tmp_path_factory.mktemp("cache_evict")
+        track_id = "4uLU612A35POGL3A3X3iie"
+        cache_file = cache_dir / f"{track_id}.json"
+
+        import json
+        import time
+
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump({"stored_at": time.time() - 100000, "tempo": 120.0, "beats": [1.0, 2.0, 3.0]}, f)
+
+        data = {
+            "beats": [{"start": 1.5}, {"start": 2.5}, {"start": 3.5}],
+            "track": {"tempo": 120.0},
+        }
+
+        with patch("src.spotify_beats._auth_get", return_value=data) as mock_auth:
+            beats = fetch_spotify_beats(track_id, cache_dir=cache_dir, ttl=3600)
+            assert beats == [1.5, 2.5, 3.5]
+            mock_auth.assert_called_once()
+
+            # verify cache was updated
+            with open(cache_file) as f:
+                new_cache = json.load(f)
+                assert new_cache["beats"] == [1.5, 2.5, 3.5]
+
+    def test_fetch_spotify_beats_corrupt_cache(self, tmp_path_factory: pytest.TempPathFactory) -> None:
+        cache_dir = tmp_path_factory.mktemp("cache_corrupt")
+        track_id = "4uLU612A35POGL3A3X3iie"
+        cache_file = cache_dir / f"{track_id}.json"
+
+        with open(cache_file, "w", encoding="utf-8") as f:
+            f.write("not json")
+
+        data = {
+            "beats": [{"start": 1.5}, {"start": 2.5}, {"start": 3.5}],
+            "track": {"tempo": 120.0},
+        }
+
+        with patch("src.spotify_beats._auth_get", return_value=data):
+            beats = fetch_spotify_beats(track_id, cache_dir=cache_dir)
+            assert beats == [1.5, 2.5, 3.5]
+
+    def test_fetch_spotify_beats_readonly_cache(
+        self, tmp_path_factory: pytest.TempPathFactory, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        cache_dir = tmp_path_factory.mktemp("cache_readonly")
+
+        import os
+
+        os.chmod(cache_dir, 0o555)  # readonly
+
+        data = {
+            "beats": [{"start": 1.5}, {"start": 2.5}, {"start": 3.5}],
+            "track": {"tempo": 120.0},
+        }
+
+        try:
+            with patch("src.spotify_beats._auth_get", return_value=data), caplog.at_level("WARNING"):
+                beats = fetch_spotify_beats("4uLU612A35POGL3A3X3iie", cache_dir=cache_dir)
+                assert beats == [1.5, 2.5, 3.5]
+                assert "nicht schreibbar" in caplog.text
+        finally:
+            os.chmod(cache_dir, 0o755)

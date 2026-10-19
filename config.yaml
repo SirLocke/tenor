@@ -254,6 +254,10 @@ nextcloud:
 # =============================================================================
 spotify:
   enabled: false
+  # Verzeichnis, in dem die Spotify-Beats zwischengespeichert werden.
+  cache_dir: ".cache/spotify_beats"
+  # Gültigkeitsdauer des Caches in Sekunden (7 Tage).
+  cache_ttl: 604800
   # Track, an dessen Beats geschnitten wird. URI oder URL, z. B.
   #   track_uri: "spotify:track:4cOdK2wGLETKBW3PvgPWqT"
   # Alternativ auf der CLI: python -m src.pipeline -m "spotify:track:<ID>"
