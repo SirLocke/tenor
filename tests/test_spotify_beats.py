@@ -432,7 +432,7 @@ class TestFetchSpotifyBeats:
             mock_auth.assert_called_once()
 
             # verify cache was updated
-            with open(cache_file, "r") as f:
+            with open(cache_file) as f:
                 new_cache = json.load(f)
                 assert new_cache["beats"] == [1.5, 2.5, 3.5]
 
@@ -457,7 +457,7 @@ class TestFetchSpotifyBeats:
         cache_dir = tmp_path_factory.mktemp("cache_readonly")
 
         import os
-        os.chmod(cache_dir, 0o555) # readonly
+        os.chmod(cache_dir, 0o555)  # readonly
 
         data = {
             "beats": [{"start": 1.5}, {"start": 2.5}, {"start": 3.5}],
@@ -465,10 +465,9 @@ class TestFetchSpotifyBeats:
         }
 
         try:
-            with patch("src.spotify_beats._auth_get", return_value=data):
-                with caplog.at_level("WARNING"):
-                    beats = fetch_spotify_beats("4uLU612A35POGL3A3X3iie", cache_dir=cache_dir)
-                    assert beats == [1.5, 2.5, 3.5]
-                    assert "nicht schreibbar" in caplog.text
+            with patch("src.spotify_beats._auth_get", return_value=data), caplog.at_level("WARNING"):
+                beats = fetch_spotify_beats("4uLU612A35POGL3A3X3iie", cache_dir=cache_dir)
+                assert beats == [1.5, 2.5, 3.5]
+                assert "nicht schreibbar" in caplog.text
         finally:
             os.chmod(cache_dir, 0o755)

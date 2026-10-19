@@ -23,6 +23,7 @@ zurückgefallen - die Pipeline läuft dann ohne Spotify weiter.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -245,7 +246,7 @@ def _evict_stale(directory: Path, ttl: float) -> int:
     evicted = 0
     for file in directory.glob("*.json"):
         try:
-            with open(file, "r", encoding="utf-8") as f:
+            with open(file, encoding="utf-8") as f:
                 data = json.load(f)
             stored_at = float(data.get("stored_at", file.stat().st_mtime))
             if now - stored_at > ttl:
@@ -280,7 +281,7 @@ def fetch_spotify_beats(
     with _beat_cache_lock:
         try:
             if cache_file.is_file():
-                with open(cache_file, "r", encoding="utf-8") as f:
+                with open(cache_file, encoding="utf-8") as f:
                     cached_data = json.load(f)
 
                 stored_at = float(cached_data.get("stored_at", cache_file.stat().st_mtime))
@@ -295,17 +296,15 @@ def fetch_spotify_beats(
                             json.dump(cached_data, f)
                         temp_file.replace(cache_file)
                     except OSError:
-                        pass # Ignore if cache dir is read-only
+                        pass  # Ignore if cache dir is read-only
 
                     return beats_hit
         except (ValueError, KeyError, TypeError, OSError, json.JSONDecodeError):
-            pass # Invalid cache file, refetch
+            pass  # Invalid cache file, refetch
 
         # Evict stale entries on miss
-        try:
+        with contextlib.suppress(OSError):
             _evict_stale(actual_cache_dir, actual_ttl)
-        except OSError:
-            pass
 
     try:
         data = _auth_get(SPOTIFY_ANALYSIS_URL.format(track_id=track_id), quota_locked=True)
