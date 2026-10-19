@@ -108,6 +108,8 @@ DEFAULTS: dict[str, Any] = {
     "spotify": {
         "enabled": False,
         "track_uri": "",
+        "cache_dir": ".cache/spotify_beats",
+        "cache_ttl": 604800,
         # Lokale Audiodatei zum gewaehlten Track. Spotify liefert fuer neu
         # registrierte Apps keine Beat-Zeitpunkte mehr (HTTP 403 seit
         # 27.11.2024); mit dieser Datei bleibt die Auswahl wirksam, weil
