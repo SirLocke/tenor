@@ -201,7 +201,9 @@ class TestGetToken:
 def isolated_cache_dir(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
     """Provide an isolated cache directory for all tests."""
     cache_dir = tmp_path_factory.mktemp("spotify_beats_cache")
-    monkeypatch.setattr("src.spotify_beats.expand_path", lambda path: cache_dir if "spotify_beats" in path else path)
+    monkeypatch.setattr(
+        "src.spotify_beats.expand_path", lambda path: cache_dir if "spotify_beats" in path else path
+    )
 
 
 class TestAuthGet:
@@ -395,12 +397,9 @@ class TestFetchSpotifyBeats:
 
         import json
         import time
+
         with open(cache_file, "w", encoding="utf-8") as f:
-            json.dump({
-                "stored_at": time.time(),
-                "tempo": 120.0,
-                "beats": [1.0, 2.0, 3.0]
-            }, f)
+            json.dump({"stored_at": time.time(), "tempo": 120.0, "beats": [1.0, 2.0, 3.0]}, f)
 
         with patch("src.spotify_beats._auth_get") as mock_auth:
             beats = fetch_spotify_beats(track_id, cache_dir=cache_dir)
@@ -414,12 +413,9 @@ class TestFetchSpotifyBeats:
 
         import json
         import time
+
         with open(cache_file, "w", encoding="utf-8") as f:
-            json.dump({
-                "stored_at": time.time() - 100000,
-                "tempo": 120.0,
-                "beats": [1.0, 2.0, 3.0]
-            }, f)
+            json.dump({"stored_at": time.time() - 100000, "tempo": 120.0, "beats": [1.0, 2.0, 3.0]}, f)
 
         data = {
             "beats": [{"start": 1.5}, {"start": 2.5}, {"start": 3.5}],
@@ -453,10 +449,13 @@ class TestFetchSpotifyBeats:
             beats = fetch_spotify_beats(track_id, cache_dir=cache_dir)
             assert beats == [1.5, 2.5, 3.5]
 
-    def test_fetch_spotify_beats_readonly_cache(self, tmp_path_factory: pytest.TempPathFactory, caplog: pytest.LogCaptureFixture) -> None:
+    def test_fetch_spotify_beats_readonly_cache(
+        self, tmp_path_factory: pytest.TempPathFactory, caplog: pytest.LogCaptureFixture
+    ) -> None:
         cache_dir = tmp_path_factory.mktemp("cache_readonly")
 
         import os
+
         os.chmod(cache_dir, 0o555)  # readonly
 
         data = {
