@@ -260,25 +260,31 @@ def find_config(path: str | os.PathLike[str] | None = None) -> Path:
     return REPO_ROOT / "config.yaml"
 
 
-def _coerce(value: str, template: Any) -> Any:
+def _coerce(value: str, template: Any, env_name: str = "") -> Any:
     """Wandelt einen Env-String in den Typ des bestehenden Config-Werts."""
     if isinstance(template, bool):
         return value.strip().lower() in ("1", "true", "yes", "on", "ja")
     if isinstance(template, int) and not isinstance(template, bool):
         try:
-            return int(value)
-        except ValueError:
-            return value
+            res = int(value)
+        except ValueError as exc:
+            raise ConfigError(f"Wert '{value}' fuer '{env_name}' ist kein gueltiger Integer.") from exc
+        if res < 0 and "offset" not in env_name.lower():
+            raise ConfigError(f"Wert '{res}' fuer '{env_name}' darf nicht negativ sein.")
+        return res
     if isinstance(template, float):
         try:
-            return float(value)
-        except ValueError:
-            return value
+            res = float(value)
+        except ValueError as exc:
+            raise ConfigError(f"Wert '{value}' fuer '{env_name}' ist kein gueltiger Float.") from exc
+        if res < 0.0 and "offset" not in env_name.lower():
+            raise ConfigError(f"Wert '{res}' fuer '{env_name}' darf nicht negativ sein.")
+        return res
     if isinstance(template, list):
         parts = [part.strip() for part in value.split(",") if part.strip()]
         if template:
             item_template = template[0]
-            return [_coerce(part, item_template) for part in parts]
+            return [_coerce(part, item_template, env_name) for part in parts]
         return parts
     return value
 
@@ -298,7 +304,7 @@ def _apply_env_overrides(cfg: dict[str, Any], prefix: str = "TENOR_") -> None:
         raw = os.environ.get(env_name)
         if raw is None:
             continue
-        cfg[key] = _coerce(raw, value)
+        cfg[key] = _coerce(raw, value, env_name)
 
 
 def _read_yaml_mapping(path: Path) -> dict[str, Any]:
