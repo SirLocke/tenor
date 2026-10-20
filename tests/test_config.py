@@ -19,7 +19,11 @@ from src import (
 
 
 def test_coerce_list():
-    assert _coerce("1.0, -1.0, 2.0", [0.3]) == [1.0, -1.0, 2.0]
+    assert _coerce("1.0, -1.0, 2.0", [0.3], "TENOR_QUALITY_SEARCH_OFFSETS", "quality.search_offsets") == [
+        1.0,
+        -1.0,
+        2.0,
+    ]
     assert _coerce("a, b, c", ["string"]) == ["a", "b", "c"]
     assert _coerce("1, 2, 3", [1]) == [1, 2, 3]
     assert _coerce("true, false, 1", [True]) == [True, False, True]
@@ -27,8 +31,20 @@ def test_coerce_list():
 
 
 def test_coerce_invalid_int_and_float():
-    assert _coerce("not_an_int", 10) == "not_an_int"
-    assert _coerce("not_a_float", 10.5) == "not_a_float"
+    with pytest.raises(ConfigError, match="ist kein gueltiger Integer"):
+        _coerce("not_an_int", 10, "TEST_INT")
+    with pytest.raises(ConfigError, match="ist kein gueltiger Float"):
+        _coerce("not_a_float", 10.5, "TEST_FLOAT")
+
+
+def test_coerce_negative_range():
+    with pytest.raises(ConfigError, match="darf nicht negativ sein"):
+        _coerce("-5", 10, "TEST_INT", "video.width")
+    with pytest.raises(ConfigError, match="darf nicht negativ sein"):
+        _coerce("-5.5", 10.5, "TEST_FLOAT", "music.gain")
+
+    # Offsets should allow negative numbers
+    assert _coerce("-0.3", 0.0, "TENOR_QUALITY_SEARCH_OFFSETS", "quality.search_offsets") == -0.3
 
 
 def test_apply_env_overrides_list():
