@@ -19,7 +19,11 @@ from src import (
 
 
 def test_coerce_list():
-    assert _coerce("1.0, -1.0, 2.0", [0.3], "TENOR_QUALITY_SEARCH_OFFSETS", "quality.search_offsets") == [1.0, -1.0, 2.0]
+    assert _coerce("1.0, -1.0, 2.0", [0.3], "TENOR_QUALITY_SEARCH_OFFSETS", "quality.search_offsets") == [
+        1.0,
+        -1.0,
+        2.0,
+    ]
     assert _coerce("a, b, c", ["string"]) == ["a", "b", "c"]
     assert _coerce("1, 2, 3", [1]) == [1, 2, 3]
     assert _coerce("true, false, 1", [True]) == [True, False, True]

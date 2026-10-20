@@ -269,7 +269,18 @@ def _coerce(value: str, template: Any, env_name: str = "", path: str = "") -> An
             res = int(value)
         except ValueError as exc:
             raise ConfigError(f"Wert '{value}' fuer '{env_name}' ist kein gueltiger Integer.") from exc
-        if res < 0 and path in ("video.width", "video.height", "video.fps", "video.max_duration", "cut.max_cuts", "text_on_first_cuts", "video.audio_sample_rate", "video.audio_nbytes", "cut.fallback_bpm", "spotify.default_bpm"):
+        if res < 0 and path in (
+            "video.width",
+            "video.height",
+            "video.fps",
+            "video.max_duration",
+            "cut.max_cuts",
+            "text_on_first_cuts",
+            "video.audio_sample_rate",
+            "video.audio_nbytes",
+            "cut.fallback_bpm",
+            "spotify.default_bpm",
+        ):
             raise ConfigError(f"Wert '{res}' fuer '{env_name}' darf nicht negativ sein.")
         return res
     if isinstance(template, float):
@@ -277,7 +288,25 @@ def _coerce(value: str, template: Any, env_name: str = "", path: str = "") -> An
             res = float(value)
         except ValueError as exc:
             raise ConfigError(f"Wert '{value}' fuer '{env_name}' ist kein gueltiger Float.") from exc
-        if res < 0.0 and path in ("music.gain", "music.fade_in", "music.fade_out", "video.original_gain", "cut.target_min", "cut.target_max", "cut.target", "cut.fallback_interval", "quality.sample_fps", "quality.edge_trim", "quality.min_sharpness", "quality.min_luma", "quality.max_luma", "quality.max_black_ratio", "quality.max_white_ratio", "quality.duplicate_threshold", "quality.timeout"):
+        if res < 0.0 and path in (
+            "music.gain",
+            "music.fade_in",
+            "music.fade_out",
+            "video.original_gain",
+            "cut.target_min",
+            "cut.target_max",
+            "cut.target",
+            "cut.fallback_interval",
+            "quality.sample_fps",
+            "quality.edge_trim",
+            "quality.min_sharpness",
+            "quality.min_luma",
+            "quality.max_luma",
+            "quality.max_black_ratio",
+            "quality.max_white_ratio",
+            "quality.duplicate_threshold",
+            "quality.timeout",
+        ):
             raise ConfigError(f"Wert '{res}' fuer '{env_name}' darf nicht negativ sein.")
         return res
     if isinstance(template, list):
