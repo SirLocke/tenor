@@ -1079,6 +1079,35 @@ def test_resolve_beats_reports_blocked_spotify(tmp_path: Path) -> None:
     assert "403" in note
 
 
+def test_spotify_beats_empty_durations_falls_back(tmp_path: Path) -> None:
+    """Schützt vor einem leeren Beat-Array, wenn Intervalle nicht als Schnitte passen."""
+    import src.pipeline as pipeline_module
+
+    cfg = _base_cfg()
+    cfg["music_dir"] = str(tmp_path / "empty-music")
+    cfg["spotify"] = {"enabled": True, "track_uri": "spotify:track:abc"}
+
+    class MockEmptyDurations:
+        def fetch_spotify_beats(self, track_uri: str, **kwargs: Any) -> list[float]:
+            # Die Intervalle sind so groß, dass sie die Target-Länge deutlich
+            # verfehlen oder durch Gruppierung aufgebraucht werden.
+            return [0.0, 10.0, 20.0]
+
+    import src.spotify_beats
+
+    with patch.object(src.spotify_beats, "fetch_spotify_beats", new=MockEmptyDurations().fetch_spotify_beats):
+        durations, source, reason = pipeline_module._resolve_beats(
+            None,
+            cfg,
+            {"target_min": 1.4, "target_max": 2.0},
+        )
+
+    assert durations == [1.5, 1.5]
+    assert source == "fallback:120bpm"
+    assert "Spotify-Beats ergeben keine verwertbaren Cuts" in reason
+    assert "keine echten Beats verfügbar" in reason
+
+
 def test_resolve_beats_falls_back_to_bpm_with_reason(tmp_path: Path) -> None:
     """Ohne jede Audiodatei bleibt der BPM-Takt - mit Begründung, nicht stumm."""
     import src.pipeline as pipeline_module

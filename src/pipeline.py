@@ -1291,7 +1291,9 @@ def _fetch_spotify_beats(track_uri: str, cfg: Mapping[str, Any]) -> tuple[list[f
         group,
         median_beat * group,
     )
-    return (durations or None), ""
+    if not durations:
+        return None, "Spotify-Beats ergeben keine verwertbaren Cuts"
+    return durations, ""
 
 
 def _get_fallback_bpm(cfg: Mapping[str, Any], music_hint: str | Path | None) -> float:
