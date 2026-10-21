@@ -1353,9 +1353,9 @@ def test_dry_run_renders_without_writing(tmp_path: Path) -> None:
         assert not target.exists()
 
 
-
 def test_export_reel_aborts_on_low_disk_space(tmp_path: Path) -> None:
     from unittest.mock import MagicMock, patch
+
     from src.pipeline import ClipInfo, Segment, export_reel
     from src.styling import GradeConfig
 
@@ -1365,7 +1365,7 @@ def test_export_reel_aborts_on_low_disk_space(tmp_path: Path) -> None:
     clip_path = tmp_path / "fake.mp4"
     clip_path.write_bytes(b"dummy")
     clip = ClipInfo(path=clip_path, duration=5.0)
-    seg = Segment(clip=clip, start=0.0, end=60.0) # 60 seconds
+    seg = Segment(clip=clip, start=0.0, end=60.0)  # 60 seconds
 
     grade = GradeConfig()
     errors = []
@@ -1394,8 +1394,10 @@ def test_export_reel_aborts_on_low_disk_space(tmp_path: Path) -> None:
             assert errors[0] == "Zu wenig Speicherplatz für den Export"
             mock_render.assert_not_called()
 
+
 def test_export_reel_proceeds_with_sufficient_disk_space(tmp_path: Path) -> None:
     from unittest.mock import MagicMock, patch
+
     from src.pipeline import ClipInfo, Segment, export_reel
     from src.styling import GradeConfig
 
@@ -1405,7 +1407,7 @@ def test_export_reel_proceeds_with_sufficient_disk_space(tmp_path: Path) -> None
     clip_path = tmp_path / "fake.mp4"
     clip_path.write_bytes(b"dummy")
     clip = ClipInfo(path=clip_path, duration=5.0)
-    seg = Segment(clip=clip, start=0.0, end=60.0) # 60 seconds
+    seg = Segment(clip=clip, start=0.0, end=60.0)  # 60 seconds
 
     grade = GradeConfig()
     errors = []
@@ -1423,7 +1425,7 @@ def test_export_reel_proceeds_with_sufficient_disk_space(tmp_path: Path) -> None
             mock_render.return_value = [mock_final]
 
             with patch("pathlib.Path.replace"):
-                target = export_reel(
+                export_reel(
                     segments=[seg],
                     cfg=cfg,
                     base_out=base_out,
@@ -1438,6 +1440,7 @@ def test_export_reel_proceeds_with_sufficient_disk_space(tmp_path: Path) -> None
 
             # Not returning None due to disk space, mock_render should be called
             mock_render.assert_called_once()
+
 
 def test_watcher_duplicate_events_prevented_by_lock(tmp_path: Path) -> None:
     import threading

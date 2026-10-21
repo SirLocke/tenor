@@ -1809,7 +1809,6 @@ def run(
     return result
 
 
-
 def check_disk_space(
     video_cfg: Mapping[str, Any],
     duration: float,
