@@ -9,7 +9,7 @@
 
 # --- Schnitt, Rendern, Export ---
 moviepy==2.2.1              # subclip/resize/composite/write_videofile
-numpy==2.5.3                # Pixel-Operationen im Grading
+numpy==2.5.4                # Pixel-Operationen im Grading
 opencv-python-headless==5.0.0.93   # LUT-Anwendung (headless: kein X11 nötig)
 pillow==11.3.0              # Typografie-Overlay, Cover
 
