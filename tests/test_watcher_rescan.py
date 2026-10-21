@@ -1,6 +1,5 @@
 import threading
-import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from src.watcher import IngestProcessor, watch
 
@@ -39,12 +38,15 @@ def test_watch_loop_rescan(
     mock_wait_for_renders,
     mock_cleanup_partials,
     mock_scan_existing,
-    tmp_path
+    tmp_path,
 ):
     # Pass a valid dir so watch() does not abort
     ingest_dir = tmp_path / "test_ingest"
     ingest_dir.mkdir()
-    cfg = {"ingest_dir": str(ingest_dir), "watcher": {"rescan_interval": 60, "process_existing_on_start": False}}
+    cfg = {
+        "ingest_dir": str(ingest_dir),
+        "watcher": {"rescan_interval": 60, "process_existing_on_start": False},
+    }
 
     # We want to simulate the passage of time without actually sleeping.
     # time.monotonic() calls:
@@ -53,6 +55,7 @@ def test_watch_loop_rescan(
     # 3. After scan_existing() if it ran
 
     time_values = [0.0, 30.0, 61.0, 61.0, 122.0, 122.0]
+
     def monotonic_side_effect():
         if time_values:
             return time_values.pop(0)
@@ -72,9 +75,11 @@ def test_watch_loop_rescan(
             real_event.set()
         return real_wait(0.01)
 
-    with patch.object(threading.Event, "wait", side_effect=wait_side_effect):
-        with patch.object(threading.Event, "is_set", side_effect=real_event.is_set):
-            watch(cfg)
+    with (
+        patch.object(threading.Event, "wait", side_effect=wait_side_effect),
+        patch.object(threading.Event, "is_set", side_effect=real_event.is_set),
+    ):
+        watch(cfg)
 
     # 1st loop iter: monotonic is 30, last_scan is 0. 30 < 60, no scan.
     # 2nd loop iter: monotonic is 61, last_scan is 0. 61 >= 60, scan happens!
