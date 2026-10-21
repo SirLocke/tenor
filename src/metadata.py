@@ -247,6 +247,13 @@ def _parse_datetime(value: str | None) -> datetime | None:
             return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
+
+    # Implausible capture dates (like 1904 QuickTime epoch or 1970 Unix epoch)
+    # fall back to file mtime so that they are correctly placed in output sequences.
+    if not (1990 <= parsed.year <= 2099):
+        log.debug("Implausibles Datum verworfen: %s", parsed)
+        return None
+
     return parsed
 
 

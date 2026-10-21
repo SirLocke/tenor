@@ -3,6 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from datetime import UTC
 from unittest.mock import MagicMock, patch
 
 from pytest import approx
@@ -10,12 +11,38 @@ from src.metadata import (
     ClipInfo,
     Geocoder,
     _collect_tags,
+    _parse_datetime,
     dominant_place,
     ffprobe_json,
     parse_coordinates,
     primary_place,
     probe_clip,
 )
+
+
+def test_parse_datetime_plausibility():
+    """Test that _parse_datetime rejects implausible dates (e.g. default epoch timestamps) and accepts plausible ones."""
+    # Implausible dates
+    assert _parse_datetime("1904-01-01T00:00:00Z") is None
+    assert _parse_datetime("1970-01-01T00:00:00Z") is None
+    assert _parse_datetime("1989-12-31T23:59:59Z") is None
+    assert _parse_datetime("2100-01-01T00:00:00Z") is None
+
+    # Plausible dates
+    dt_1990 = _parse_datetime("1990-01-01T00:00:00Z")
+    assert dt_1990 is not None
+    assert dt_1990.year == 1990
+    assert dt_1990.tzinfo == UTC
+
+    dt_2024 = _parse_datetime("2024-05-12T12:00:00Z")
+    assert dt_2024 is not None
+    assert dt_2024.year == 2024
+    assert dt_2024.month == 5
+    assert dt_2024.day == 12
+
+    dt_2099 = _parse_datetime("2099-12-31T23:59:59Z")
+    assert dt_2099 is not None
+    assert dt_2099.year == 2099
 
 
 def test_parse_coordinates_valid():
