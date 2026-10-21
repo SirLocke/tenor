@@ -296,6 +296,7 @@ class IngestProcessor:
         # Rescan erneut versuchen, statt sie endgültig zu verlieren.
         self.retry_limit = max(int(get(cfg, "watcher.retry_limit", 3) or 0), 0)
         self.retry_backoff = max(float(get(cfg, "watcher.retry_backoff", 300) or 0), 0.0)
+        self.rescan_interval = max(float(get(cfg, "watcher.rescan_interval", 300) or 0), 0.0)
         self.output_dir = expand_path(get(cfg, "output_dir", "output"))
         # Originalton-Opt-in: der Watcher setzt bei ``--audio``/``--no-audio``
         # ``video.audio`` bereits in der Config; hier nur durchreichen, damit
@@ -639,8 +640,19 @@ def watch(cfg: Mapping[str, Any], *, config_path: str | None = None, once: bool 
         if once:
             return 0
 
+        last_scan = time.monotonic()
         while not stopping.is_set():
             stopping.wait(1.0)
+
+            # Watchdog (inotify) verwirft IN_Q_OVERFLOW Events lautlos.
+            # Ein regelmäßiger Rescan fängt verpasste Dateien auf und
+            # hilft auch bei unzuverlässigen Netzwerk-Shares (SMB/CIFS).
+            if processor.rescan_interval > 0 and time.monotonic() - last_scan >= processor.rescan_interval:
+                try:
+                    processor.scan_existing()
+                except Exception as exc:  # pragma: no cover
+                    log.exception("Regelmäßiger Rescan fehlgeschlagen: %s", exc)
+                last_scan = time.monotonic()
     finally:
         observer.stop()
         observer.join(timeout=30)
