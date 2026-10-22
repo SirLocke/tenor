@@ -12,7 +12,7 @@ import re
 import subprocess
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -224,7 +224,7 @@ def _to_float(value: Any) -> float:
         return float("nan")
 
 
-def _parse_datetime(value: str | None) -> datetime | None:
+def _parse_datetime(value: str | None, *, future_tolerance: float = 86400.0) -> datetime | None:
     """Parst QuickTime/ffprobe-Zeitstempel zu einem timezone-aware datetime."""
     if not value:
         return None
@@ -250,7 +250,10 @@ def _parse_datetime(value: str | None) -> datetime | None:
 
     # Implausible capture dates (like 1904 QuickTime epoch or 1970 Unix epoch)
     # fall back to file mtime so that they are correctly placed in output sequences.
-    if not (1990 <= parsed.year <= 2099):
+    now_utc = datetime.now(UTC)
+    max_date = now_utc + timedelta(seconds=future_tolerance)
+
+    if not (parsed.year >= 1990) or parsed > max_date:
         log.debug("Implausibles Datum verworfen: %s", parsed)
         return None
 
@@ -308,14 +311,14 @@ def _valid_coords(lat: float, lon: float) -> bool:
     return -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0 and not (lat == 0.0 and lon == 0.0)
 
 
-def embedded_datetime(value: str | None) -> datetime | None:
+def embedded_datetime(value: str | None, *, future_tolerance: float = 86400.0) -> datetime | None:
     """Datumsanteil aus einem ISO-6709-String (iPhone legt ihn mit ab)."""
     if not value:
         return None
     match = _EMBEDDED_DATE.search(str(value))
     if not match:
         return None
-    return _parse_datetime(f"{match.group(1)}T{match.group(2)}Z")
+    return _parse_datetime(f"{match.group(1)}T{match.group(2)}Z", future_tolerance=future_tolerance)
 
 
 # --------------------------------------------------------------------------- #
@@ -443,7 +446,7 @@ class Geocoder:
 # --------------------------------------------------------------------------- #
 # Sammlung
 # --------------------------------------------------------------------------- #
-def probe_clip(path: str | Path) -> ClipInfo:
+def probe_clip(path: str | Path, *, future_tolerance: float = 86400.0) -> ClipInfo:
     """Liest alle für die Pipeline relevanten Metadaten einer Datei."""
     clip = ClipInfo(path=Path(path))
     probe = ffprobe_json(path)
@@ -453,11 +456,11 @@ def probe_clip(path: str | Path) -> ClipInfo:
 
     tags = _collect_tags(probe)
 
-    created = _parse_datetime(_tag(tags, *CREATION_TAGS))
+    created = _parse_datetime(_tag(tags, *CREATION_TAGS), future_tolerance=future_tolerance)
     geo_raw = _tag(tags, *LOCATION_TAGS)
     if created is None:
         # Manche iPhone-Dateien tragen das Datum nur im Location-Tag.
-        created = embedded_datetime(geo_raw)
+        created = embedded_datetime(geo_raw, future_tolerance=future_tolerance)
     clip.created = created
 
     fmt = probe.get("format")
@@ -543,6 +546,7 @@ def collect_clips(
     recursive: bool = False,
     ignore_dirs: Sequence[str] = (),
     extensions: Sequence[str] = (".mov", ".mp4", ".m4v", ".hevc", ".h265"),
+    future_tolerance: float = 86400.0,
 ) -> list[ClipInfo]:
     """Sammelt Clips aus Dateien und/oder Verzeichnissen, chronologisch sortiert.
 
@@ -575,7 +579,7 @@ def collect_clips(
     clips: list[ClipInfo] = []
     for path in unique:
         try:
-            clip = probe_clip(path)
+            clip = probe_clip(path, future_tolerance=future_tolerance)
         except Exception as exc:  # defensiv: Metadaten dürfen nie den Lauf killen
             log.exception("Unerwarteter Fehler beim Lesen von %s: %s", path, exc)
             clip = ClipInfo(path=path, error=str(exc))
@@ -654,6 +658,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.input,
         geocoder=geocoder,
         recursive=bool(get(cfg, "watcher.recursive", False)),
+        future_tolerance=float(get(cfg, "metadata.future_tolerance", 86400.0)),
     )
     if geocoder is not None:
         geocoder.save_cache()

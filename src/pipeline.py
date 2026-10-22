@@ -1612,6 +1612,7 @@ def run(
         recursive=bool(get(cfg, "watcher.recursive", False)),
         ignore_dirs=list(get(cfg, "watcher.ignore_dirs", [])),
         extensions=list(get(cfg, "extensions", [".mov", ".mp4"])),
+        future_tolerance=float(get(cfg, "metadata.future_tolerance", 86400.0)),
     )
     geocoder.save_cache()
 

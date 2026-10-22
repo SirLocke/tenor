@@ -203,6 +203,11 @@ fonts:
 # =============================================================================
 # Metadaten / Geocoding
 # =============================================================================
+metadata:
+  # Erlaubte Abweichung in Sekunden für Metadaten-Zeitstempel in der Zukunft.
+  # Hilft dabei, far-future Datumsangaben abzufangen (z.B. falsche Uhreinstellung)
+  future_tolerance: 86400
+
 geocoding:
   enabled: true
   timeout: 5               # Sekunden (Plan-Vorgabe)

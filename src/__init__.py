@@ -105,6 +105,9 @@ DEFAULTS: dict[str, Any] = {
         "cache_dir": ".cache/quality",
         "timeout": 60.0,
     },
+    "metadata": {
+        "future_tolerance": 86400,
+    },
     "spotify": {
         "enabled": False,
         "track_uri": "",
