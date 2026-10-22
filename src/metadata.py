@@ -253,7 +253,7 @@ def _parse_datetime(value: str | None, *, future_tolerance: float = 86400.0) -> 
     now_utc = datetime.now(UTC)
     max_date = now_utc + timedelta(seconds=future_tolerance)
 
-    if not (1990 <= parsed.year) or parsed > max_date:
+    if not (parsed.year >= 1990) or parsed > max_date:
         log.debug("Implausibles Datum verworfen: %s", parsed)
         return None
 

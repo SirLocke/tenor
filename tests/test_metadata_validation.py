@@ -42,7 +42,7 @@ def test_parse_datetime_plausibility():
 
     # A date far in the future will be rejected by default, unless we pass a large tolerance
     # or mock the current date. Here we just pass a huge future_tolerance.
-    dt_2099 = _parse_datetime("2099-12-31T23:59:59Z", future_tolerance=3153600000) # 100 years
+    dt_2099 = _parse_datetime("2099-12-31T23:59:59Z", future_tolerance=3153600000)  # 100 years
     assert dt_2099 is not None
     assert dt_2099.year == 2099
 
