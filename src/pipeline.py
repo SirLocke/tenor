@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import os
+import re
 import shlex
 import statistics
 import subprocess
@@ -1089,10 +1090,14 @@ def build_output_name(cfg: Mapping[str, Any], title: str, when: float, day: str 
     template = str(naming.get("template", "{date}_{slug}_{time}"))
     values = _naming_values(cfg, title, when, day)
     try:
-        return template.format(**values)
+        raw_name = template.format(**values)
     except KeyError as exc:
         log.warning("Unbekannter Platzhalter %s in naming.template - Fallback", exc)
-        return f"{values['date']}_{values['slug']}_{values['time']}"
+        raw_name = f"{values['date']}_{values['slug']}_{values['time']}"
+
+    cleaned = re.sub(r"[^\w\s-]", "", raw_name, flags=re.UNICODE)
+    cleaned = re.sub(r"[\s_]+", "_", cleaned).strip(" _-")
+    return cleaned or "reel"
 
 
 def build_output_dir(
