@@ -574,7 +574,7 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
     clip = VideoFileClip(str(path), audio=with_audio)
     try:
         return _validated(clip)
-    except Exception:
+    except BaseException:
         # Reader (und damit der ffmpeg-Kindprozess) ist schon offen.
         with contextlib.suppress(Exception):  # pragma: no cover
             clip.close()
@@ -694,6 +694,7 @@ def render_segments(
 
     def _render_one(index: int, segment: Segment) -> None:
         local_sources: list[Any] = []
+        success = False
         try:
             # Text-Overlay nur auf den ersten N Cuts (Instagram-Reels-Konvention:
             # der Hook trägt die Beschriftung, der Rest bleibt clean).
@@ -726,6 +727,7 @@ def render_segments(
                 segment.end,
                 segment.duration,
             )
+            success = True
         except Exception as exc:
             # Nur der fehlgeschlagene Cut wird verworfen. Die bereits
             # gerenderten Cuts bleiben erhalten - sonst hätte das Reel vorn
@@ -734,44 +736,46 @@ def render_segments(
             log.error("%s", message)
             with failures_lock:
                 failures.append(message)
-            _close_all(local_sources)
+        finally:
+            if not success:
+                _close_all(local_sources)
 
-    # Use ThreadPoolExecutor for parallel rendering
-    with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as executor:
-        futures = []
-        for i, seg in enumerate(segments, start=1):
-            futures.append(executor.submit(_render_one, i, seg))
-        for future in futures:
-            future.result()
-
-    rendered = [c for c in rendered_array if c is not None]
-
-    if not rendered:
-        _close_all(sources)
-        return []
-
-    # concatenate_videoclips kann bei gemischten Größen/fehlerhaften
-    # n_frames werfen. Ohne den finally-Block bleiben dann ALLE geöffneten
-    # Reader (je ein ffmpeg-Prozess) bis zum nächsten GC-Cycle hängen.
     try:
+        # Use ThreadPoolExecutor for parallel rendering
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as executor:
+            futures = []
+            for i, seg in enumerate(segments, start=1):
+                futures.append(executor.submit(_render_one, i, seg))
+            for future in futures:
+                future.result()
+
+        rendered = [c for c in rendered_array if c is not None]
+
+        if not rendered:
+            _close_all(sources)
+            return []
+
+        # concatenate_videoclips kann bei gemischten Größen/fehlerhaften
+        # n_frames werfen. Ohne den finally-Block bleiben dann ALLE geöffneten
+        # Reader (je ein ffmpeg-Prozess) bis zum nächsten GC-Cycle hängen.
         final = concatenate_videoclips(rendered, method="chain")
+        if not with_audio:
+            # Ohne Tonwunsch wird die Spur abgeworfen, damit der Export nicht
+            # versehentlich eine mitgeschleppte Tonspur enthält.
+            with contextlib.suppress(Exception):  # pragma: no cover
+                final = final.without_audio()
+        elif getattr(final, "audio", None) is None:
+            log.warning(
+                "Kein einziger Cut hatte eine Tonspur - der Export bleibt stumm (rohvideo.audio_codec=%s)",
+                get(cfg, "video.audio_codec", "aac"),
+            )
+        # Quell-Reader leben bis nach write_videofile weiter
+        final.tenor_sources = sources  # type: ignore[attr-defined]
+        return [final]
     except BaseException:
         _close_all(sources)
-        _close_all(rendered)
+        _close_all([c for c in rendered_array if c is not None])
         raise
-    if not with_audio:
-        # Ohne Tonwunsch wird die Spur abgeworfen, damit der Export nicht
-        # versehentlich eine mitgeschleppte Tonspur enthält.
-        with contextlib.suppress(Exception):  # pragma: no cover
-            final = final.without_audio()
-    elif getattr(final, "audio", None) is None:
-        log.warning(
-            "Kein einziger Cut hatte eine Tonspur - der Export bleibt stumm (rohvideo.audio_codec=%s)",
-            get(cfg, "video.audio_codec", "aac"),
-        )
-    # Quell-Reader leben bis nach write_videofile weiter
-    final.tenor_sources = sources  # type: ignore[attr-defined]
-    return [final]
 
 
 def _close_all(clips: Sequence[Any]) -> None:
@@ -868,6 +872,7 @@ def mix_music(
         log.warning("Musikdatei %s nicht lesbar (%s) - Reel bleibt stumm", path.name, exc)
         return None
 
+    success = False
     try:
         target = float(video.duration or 0.0)
         if target <= 0.0:
@@ -935,10 +940,14 @@ def mix_music(
         # ffmpeg-Prozess bis zum nächsten GC hängen - dasselbe Muster wie
         # ``tenor_sources`` im Rendern.
         result.tenor_music_reader = track  # type: ignore[attr-defined]
+        success = True
         return result
     except Exception as exc:
         log.warning("Musik konnte nicht gemischt werden (%s) - Reel bleibt stumm", exc)
         return None
+    finally:
+        if not success:
+            _close_all([track])
 
 
 def make_overlay_array(cfg: Mapping[str, Any], title: str, subtitle: str, geo_tag: str = "") -> np.ndarray:
@@ -2009,95 +2018,96 @@ def export_reel(
 
     errors_seen.extend(errors)
     final = rendered[0]
-    music_mixed = False
-    if music is not None:
-        mixed = mix_music(final, music, cfg, video_cfg)
-        if mixed is not None:
-            final = mixed
-            music_mixed = True
-
-    def _attempt_export(is_lossless: bool) -> None:
-        ffmpeg_params = ["-pix_fmt", str(video_cfg.get("pixel_format", "yuv420p"))]
-        # Eine gemischte Musikspur ist Ton im fertigen Reel und braucht deshalb
-        # dieselben Codec-Parameter wie der Originalton - sonst schrieb moviepy
-        # stumm bzw. mit libmp3lame und Instagram hätte nichts abzuspielen.
-        with_track = bool(want_audio) or bool(getattr(final, "audio", None) is not None)
-        crf = video_cfg.get("crf")
-        preset = str(video_cfg.get("preset", "medium"))
-
-        if is_lossless:
-            crf = 0
-            preset = "ultrafast"
-
-        if crf is not None:
-            ffmpeg_params.extend(["-crf", str(crf)])
-        if bool(video_cfg.get("faststart", True)):
-            ffmpeg_params.extend(["-movflags", "+faststart"])
-        threads = int(video_cfg.get("threads", 0) or 0)
-        if threads:
-            ffmpeg_params.extend(["-threads", str(threads)])
-
-        write_kwargs: dict[str, Any] = {
-            "fps": int(video_cfg.get("fps", 30)),
-            "codec": str(video_cfg.get("codec", "libx264")),
-            # `video.audio` entscheidet über den *Originalton*; eine gemischte
-            # Musikspur macht das Reel aber unabhängig davon hörbar.
-            "audio": bool(video_cfg.get("audio", False)) or with_track,
-            "preset": preset,
-            "threads": threads or None,
-            "ffmpeg_params": ffmpeg_params,
-            "logger": None,
-        }
-        temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
-
-        if write_kwargs["audio"]:
-            # Nur wenn wirklich eine Spur mitkommt: sonst würde moviepy eine
-            # leere Audiodatei erzeugen und -copy in den Container muxen.
-            # Instagram/WhatsApp akzeptieren nur AAC, nicht das moviepy-Default
-            # libmp3lame.
-            write_kwargs["audio_codec"] = str(video_cfg.get("audio_codec", "aac"))
-            write_kwargs["audio_bitrate"] = str(video_cfg.get("audio_bitrate", "192k"))
-            write_kwargs["audio_fps"] = int(video_cfg.get("audio_sample_rate", 44100))
-            write_kwargs["audio_nbytes"] = int(video_cfg.get("audio_nbytes", 2))
-            write_kwargs["temp_audiofile"] = str(temp_audio)
-
-        if dry_run:
-            log.info("DRY-RUN: Rendere Video-Frames ohne Export")
-            for _ in final.iter_frames(fps=write_kwargs["fps"], dtype="uint8"):
-                pass
-            if write_kwargs["audio"] and getattr(final, "audio", None) is not None:
-                log.info("DRY-RUN: Rendere Audio-Frames ohne Export")
-                for _ in final.audio.iter_chunks(fps=write_kwargs["audio_fps"]):
-                    pass
-        else:
-            final.write_videofile(str(partial), **write_kwargs)
-
     try:
-        _attempt_export(bool(video_cfg.get("lossless")))
-    except Exception as exc:
-        partial.unlink(missing_ok=True)
-        temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
-        temp_audio.unlink(missing_ok=True)
-        for bc in partial.parent.glob("*.beat-cache"):
-            bc.unlink(missing_ok=True)
-        if bool(video_cfg.get("lossless")):
-            log.warning("Lossless-Export fehlgeschlagen, versuche Standard-Export: %s", exc)
-            try:
-                _attempt_export(False)
-            except Exception as exc2:
-                log.exception("Export nach %s fehlgeschlagen: %s", partial, exc2)
-                partial.unlink(missing_ok=True)
-                temp_audio.unlink(missing_ok=True)
-                for bc in partial.parent.glob("*.beat-cache"):
-                    bc.unlink(missing_ok=True)
+        music_mixed = False
+        if music is not None:
+            mixed = mix_music(final, music, cfg, video_cfg)
+            if mixed is not None:
+                final = mixed
+                music_mixed = True
+
+        def _attempt_export(is_lossless: bool) -> None:
+            ffmpeg_params = ["-pix_fmt", str(video_cfg.get("pixel_format", "yuv420p"))]
+            # Eine gemischte Musikspur ist Ton im fertigen Reel und braucht deshalb
+            # dieselben Codec-Parameter wie der Originalton - sonst schrieb moviepy
+            # stumm bzw. mit libmp3lame und Instagram hätte nichts abzuspielen.
+            with_track = bool(want_audio) or bool(getattr(final, "audio", None) is not None)
+            crf = video_cfg.get("crf")
+            preset = str(video_cfg.get("preset", "medium"))
+
+            if is_lossless:
+                crf = 0
+                preset = "ultrafast"
+
+            if crf is not None:
+                ffmpeg_params.extend(["-crf", str(crf)])
+            if bool(video_cfg.get("faststart", True)):
+                ffmpeg_params.extend(["-movflags", "+faststart"])
+            threads = int(video_cfg.get("threads", 0) or 0)
+            if threads:
+                ffmpeg_params.extend(["-threads", str(threads)])
+
+            write_kwargs: dict[str, Any] = {
+                "fps": int(video_cfg.get("fps", 30)),
+                "codec": str(video_cfg.get("codec", "libx264")),
+                # `video.audio` entscheidet über den *Originalton*; eine gemischte
+                # Musikspur macht das Reel aber unabhängig davon hörbar.
+                "audio": bool(video_cfg.get("audio", False)) or with_track,
+                "preset": preset,
+                "threads": threads or None,
+                "ffmpeg_params": ffmpeg_params,
+                "logger": None,
+            }
+            temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
+
+            if write_kwargs["audio"]:
+                # Nur wenn wirklich eine Spur mitkommt: sonst würde moviepy eine
+                # leere Audiodatei erzeugen und -copy in den Container muxen.
+                # Instagram/WhatsApp akzeptieren nur AAC, nicht das moviepy-Default
+                # libmp3lame.
+                write_kwargs["audio_codec"] = str(video_cfg.get("audio_codec", "aac"))
+                write_kwargs["audio_bitrate"] = str(video_cfg.get("audio_bitrate", "192k"))
+                write_kwargs["audio_fps"] = int(video_cfg.get("audio_sample_rate", 44100))
+                write_kwargs["audio_nbytes"] = int(video_cfg.get("audio_nbytes", 2))
+                write_kwargs["temp_audiofile"] = str(temp_audio)
+
+            if dry_run:
+                log.info("DRY-RUN: Rendere Video-Frames ohne Export")
+                for _ in final.iter_frames(fps=write_kwargs["fps"], dtype="uint8"):
+                    pass
+                if write_kwargs["audio"] and getattr(final, "audio", None) is not None:
+                    log.info("DRY-RUN: Rendere Audio-Frames ohne Export")
+                    for _ in final.audio.iter_chunks(fps=write_kwargs["audio_fps"]):
+                        pass
+            else:
+                final.write_videofile(str(partial), **write_kwargs)
+
+        try:
+            _attempt_export(bool(video_cfg.get("lossless")))
+        except Exception as exc:
+            partial.unlink(missing_ok=True)
+            temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
+            temp_audio.unlink(missing_ok=True)
+            for bc in partial.parent.glob("*.beat-cache"):
+                bc.unlink(missing_ok=True)
+            if bool(video_cfg.get("lossless")):
+                log.warning("Lossless-Export fehlgeschlagen, versuche Standard-Export: %s", exc)
+                try:
+                    _attempt_export(False)
+                except Exception as exc2:
+                    log.exception("Export nach %s fehlgeschlagen: %s", partial, exc2)
+                    partial.unlink(missing_ok=True)
+                    temp_audio.unlink(missing_ok=True)
+                    for bc in partial.parent.glob("*.beat-cache"):
+                        bc.unlink(missing_ok=True)
+                    if errors_seen is not None:
+                        errors_seen.append(f"Export fehlgeschlagen: {exc2}")
+                    return None
+            else:
+                log.exception("Export nach %s fehlgeschlagen: %s", partial, exc)
                 if errors_seen is not None:
-                    errors_seen.append(f"Export fehlgeschlagen: {exc2}")
+                    errors_seen.append(f"Export fehlgeschlagen: {exc}")
                 return None
-        else:
-            log.exception("Export nach %s fehlgeschlagen: %s", partial, exc)
-            if errors_seen is not None:
-                errors_seen.append(f"Export fehlgeschlagen: {exc}")
-            return None
     except BaseException:
         # SIGTERM/Stromausfall: unfertige Datei nicht liegen lassen
         partial.unlink(missing_ok=True)
