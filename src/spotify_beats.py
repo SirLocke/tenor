@@ -316,6 +316,21 @@ def fetch_spotify_beats(
             log.warning("Spotify lieferte keine Beats für %s", track_uri)
             return None
 
+        tempo = 0.0
+        duration = float("inf")
+        track = data.get("track") if isinstance(data, dict) else None
+        if isinstance(track, dict):
+            try:
+                tempo = float(track.get("tempo") or 0.0)
+            except (TypeError, ValueError):
+                tempo = 0.0
+            try:
+                duration_val = track.get("duration")
+                if duration_val is not None:
+                    duration = float(duration_val)
+            except (TypeError, ValueError):
+                pass
+
         beats: list[float] = []
         for entry in raw:
             try:
@@ -326,16 +341,16 @@ def fetch_spotify_beats(
                 beats.append(value)
         beats.sort()
 
-        tempo = 0.0
-        track = data.get("track") if isinstance(data, dict) else None
-        if isinstance(track, dict):
-            try:
-                tempo = float(track.get("tempo") or 0.0)
-            except (TypeError, ValueError):
-                tempo = 0.0
-        log.info("Spotify: %d Beats, Tempo ~%.1f BPM für %s", len(beats), tempo, track_uri)
+        valid_beats: list[float] = []
+        for b in beats:
+            if b > duration:
+                break
+            if not valid_beats or b > valid_beats[-1]:
+                valid_beats.append(b)
 
-        result = beats or None
+        log.info("Spotify: %d Beats, Tempo ~%.1f BPM für %s", len(valid_beats), tempo, track_uri)
+
+        result = valid_beats or None
 
         if result:
             with _beat_cache_lock:
