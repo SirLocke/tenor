@@ -1,7 +1,9 @@
-import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-from src.watcher import is_media, size_stable, get_stat, wait_until_stable, WatcherState
+from unittest.mock import MagicMock, patch
+
+import pytest
+from src.watcher import WatcherState, get_stat, is_media, size_stable, wait_until_stable
+
 
 def test_get_stat(tmp_path):
     f = tmp_path / "test.txt"
@@ -9,13 +11,16 @@ def test_get_stat(tmp_path):
     stat = get_stat(f)
     assert stat.st_size == 5
 
+
 def test_get_stat_retry_failure(tmp_path):
     f = tmp_path / "missing.txt"
     with pytest.raises(FileNotFoundError):
         get_stat(f, retries=2, delay=0.01)
 
+
 def test_is_media():
-    assert is_media(Path("video.mp4"), [".mp4", ".mov"]) is False # Not a file
+    assert is_media(Path("video.mp4"), [".mp4", ".mov"]) is False  # Not a file
+
 
 def test_is_media_with_files(tmp_path):
     f_mp4 = tmp_path / "video.mp4"
@@ -30,10 +35,12 @@ def test_is_media_with_files(tmp_path):
     f_part.touch()
     assert is_media(f_part, [".mp4"]) is False
 
+
 def test_size_stable_success(tmp_path):
     f = tmp_path / "video.mp4"
     f.write_text("hello")
     assert size_stable(f, checks=1, poll=0) is True
+
 
 def test_size_stable_failure(tmp_path):
     f = tmp_path / "video.mp4"
@@ -49,34 +56,35 @@ def test_size_stable_failure(tmp_path):
         mock_stat.side_effect = [s1, s2]
         assert size_stable(f, checks=2, poll=0) is False
 
+
 def test_wait_until_stable(tmp_path):
     f = tmp_path / "test.mp4"
     f.touch()
 
-    with patch("time.monotonic", side_effect=[0, 1, 2, 3, 4]):
-        with patch("src.watcher.get_stat") as mock_stat:
-            s1 = MagicMock()
-            s1.st_size = 10
-            s1.st_mtime = 100
-            mock_stat.return_value = s1
-            with patch("time.sleep"):
-                assert wait_until_stable(f, stable_seconds=1, poll=0.1) is True
+    with patch("time.monotonic", side_effect=[0, 1, 2, 3, 4]), patch("src.watcher.get_stat") as mock_stat:
+        s1 = MagicMock()
+        s1.st_size = 10
+        s1.st_mtime = 100
+        mock_stat.return_value = s1
+        with patch("time.sleep"):
+            assert wait_until_stable(f, stable_seconds=1, poll=0.1) is True
+
 
 def test_wait_until_stable_max_wait(tmp_path):
     f = tmp_path / "test.mp4"
     f.touch()
 
-    with patch("time.monotonic", side_effect=[0, 1, 2, 3, 4]):
-        with patch("src.watcher.get_stat") as mock_stat:
-            s1 = MagicMock()
-            s1.st_size = 10
-            s1.st_mtime = 100
-            s2 = MagicMock()
-            s2.st_size = 20
-            s2.st_mtime = 100
-            mock_stat.side_effect = [s1, s2, s2, s2, s2]
-            with patch("time.sleep"):
-                assert wait_until_stable(f, stable_seconds=10, poll=0, max_wait=2) is False
+    with patch("time.monotonic", side_effect=[0, 1, 2, 3, 4]), patch("src.watcher.get_stat") as mock_stat:
+        s1 = MagicMock()
+        s1.st_size = 10
+        s1.st_mtime = 100
+        s2 = MagicMock()
+        s2.st_size = 20
+        s2.st_mtime = 100
+        mock_stat.side_effect = [s1, s2, s2, s2, s2]
+        with patch("time.sleep"):
+            assert wait_until_stable(f, stable_seconds=10, poll=0, max_wait=2) is False
+
 
 def test_watcher_state_load_save(tmp_path):
     state_file = tmp_path / ".tenor-state.json"
@@ -89,6 +97,7 @@ def test_watcher_state_load_save(tmp_path):
     loaded_state = WatcherState.load(state_file)
     assert loaded_state.is_processed(f)
 
+
 def test_watcher_state_load_corrupt(tmp_path):
     state_file = tmp_path / ".tenor-state.json"
     state_file.write_text("{corrupt json")
@@ -96,8 +105,10 @@ def test_watcher_state_load_corrupt(tmp_path):
     assert isinstance(state, WatcherState)
     assert len(state.processed) == 0
 
+
 def test_ingest_processor_cleanup_partials(tmp_path):
     from src.watcher import IngestProcessor
+
     cfg = {"output_dir": str(tmp_path)}
     p = IngestProcessor(cfg)
     part_file = tmp_path / "video.part.mp4"
@@ -105,22 +116,29 @@ def test_ingest_processor_cleanup_partials(tmp_path):
     assert p.cleanup_partials() == 1
     assert not part_file.exists()
 
+
 def test_ingest_handler_is_ignored(tmp_path):
-    from src.watcher import IngestProcessor, IngestHandler
+    from src.watcher import IngestHandler, IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path), "watcher": {"ignore_dirs": [".git", "node_modules"]}}
     p = IngestProcessor(cfg)
     handler = IngestHandler(p)
     assert handler._is_ignored(tmp_path / ".git" / "file.mp4") is True
     assert handler._is_ignored(tmp_path / "good" / "file.mp4") is False
 
+
 def test_main_argparse(capsys):
     from src.watcher import main
-    with patch("src.watcher.watch", return_value=0):
-        with patch("src.watcher.load_config", return_value={"ingest_dir": "."}):
-            assert main(["-c", "config.yaml", "--once"]) == 0
+
+    with (
+        patch("src.watcher.watch", return_value=0),
+        patch("src.watcher.load_config", return_value={"ingest_dir": "."}),
+    ):
+        assert main(["-c", "config.yaml", "--once"]) == 0
+
 
 def test_ingest_handler_events(tmp_path):
-    from src.watcher import IngestProcessor, IngestHandler
+    from src.watcher import IngestHandler, IngestProcessor
     from watchdog.events import FileCreatedEvent, FileModifiedEvent, FileMovedEvent
 
     cfg = {"ingest_dir": str(tmp_path)}
@@ -145,14 +163,18 @@ def test_ingest_handler_events(tmp_path):
     handler.on_created(dir_event)
     p.on_file_event.assert_not_called()
 
+
 def test_process_batch_empty():
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": "."}
     p = IngestProcessor(cfg)
     assert p.process_batch([]) is None
 
+
 def test_process_batch_success(tmp_path):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path), "output_dir": str(tmp_path / "out")}
     p = IngestProcessor(cfg)
 
@@ -167,15 +189,17 @@ def test_process_batch_success(tmp_path):
         mock_result.outputs = ["output.mp4"]
         mock_run.return_value = mock_result
 
-        with patch.object(p.state, 'save') as mock_save:
+        with patch.object(p.state, "save") as mock_save:
             res = p.process_batch([f1, f2])
             assert res == mock_result
             assert p.state.is_processed(f1)
             assert p.state.is_processed(f2)
             mock_save.assert_called_once()
 
+
 def test_process_batch_failure(tmp_path):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path), "output_dir": str(tmp_path / "out")}
     p = IngestProcessor(cfg)
 
@@ -192,20 +216,24 @@ def test_process_batch_failure(tmp_path):
         assert not p.state.is_processed(f1)
         assert p._failures[p.state.key(f1)] == 1
 
+
 def test_scan_existing(tmp_path):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path)}
     p = IngestProcessor(cfg)
 
     f1 = tmp_path / "video1.mp4"
     f1.touch()
 
-    with patch.object(p, 'process_batch') as mock_process:
+    with patch.object(p, "process_batch") as mock_process:
         assert p.scan_existing() == 1
         mock_process.assert_called_once()
 
+
 def test_on_file_event_triggers_thread(tmp_path):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path)}
     p = IngestProcessor(cfg)
 
@@ -220,15 +248,20 @@ def test_on_file_event_triggers_thread(tmp_path):
         assert f1 in p._pending
         mock_thread_instance.start.assert_called_once()
 
+
 def test_main_config_error():
     from src.watcher import main
+
     with patch("src.watcher.load_config", side_effect=Exception("Test")):
         from src import ConfigError
+
         with patch("src.watcher.load_config", side_effect=ConfigError("Bad cfg")):
             assert main(["-c", "bad.yaml"]) == 2
 
+
 def test_settle_and_collect_happy_path(tmp_path):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path), "watcher": {"debounce_seconds": 1, "batch_window": 1}}
     p = IngestProcessor(cfg)
 
@@ -236,16 +269,20 @@ def test_settle_and_collect_happy_path(tmp_path):
     f1.touch()
     p._pending.add(f1)
 
-    with patch("src.watcher.wait_until_stable", return_value=True):
-        with patch.object(p, '_await_batch_window'):
-            with patch.object(p, 'process_batch') as mock_process:
-                p._settle_and_collect(f1)
-                mock_process.assert_called_once_with([f1])
-                assert f1 not in p._pending
-                assert f1 not in p._inflight
+    with (
+        patch("src.watcher.wait_until_stable", return_value=True),
+        patch.object(p, "_await_batch_window"),
+        patch.object(p, "process_batch") as mock_process,
+    ):
+        p._settle_and_collect(f1)
+        mock_process.assert_called_once_with([f1])
+        assert f1 not in p._pending
+        assert f1 not in p._inflight
+
 
 def test_settle_and_collect_unstable(tmp_path):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path)}
     p = IngestProcessor(cfg)
 
@@ -257,8 +294,10 @@ def test_settle_and_collect_unstable(tmp_path):
         p._settle_and_collect(f1)
         assert f1 not in p._pending
 
+
 def test_await_batch_window_happy_path(tmp_path):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path), "watcher": {"batch_window": 1}}
     p = IngestProcessor(cfg)
 
@@ -267,14 +306,17 @@ def test_await_batch_window_happy_path(tmp_path):
     p._pending.add(f1)
 
     time_values = [0, 2, 2, 2, 2, 2, 2, 2, 2, 2]
-    def dummy_time(): return time_values.pop(0) if time_values else 2
 
-    with patch("time.monotonic", side_effect=dummy_time):
-        with patch("src.watcher.size_stable", return_value=True):
-            p._await_batch_window()
+    def dummy_time():
+        return time_values.pop(0) if time_values else 2
+
+    with patch("time.monotonic", side_effect=dummy_time), patch("src.watcher.size_stable", return_value=True):
+        p._await_batch_window()
+
 
 def test_process_batch_pipeline_exception(tmp_path):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path), "output_dir": str(tmp_path / "out")}
     p = IngestProcessor(cfg)
 
@@ -286,18 +328,24 @@ def test_process_batch_pipeline_exception(tmp_path):
         assert res is None
         assert p._failures[p.state.key(f1)] == 1
 
+
 def test_watch_start_no_ingest_dir(tmp_path):
     from src.watcher import watch
+
     cfg = {"ingest_dir": str(tmp_path / "missing")}
     assert watch(cfg) == 2
 
+
 def test_watch_graceful_exit(tmp_path):
     from src.watcher import watch
+
     cfg = {"ingest_dir": str(tmp_path)}
     assert watch(cfg, once=True) == 0
 
+
 def test_may_retry(tmp_path):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path), "watcher": {"retry_limit": 2, "retry_backoff": 10}}
     p = IngestProcessor(cfg)
 
@@ -341,6 +389,7 @@ def test_watcher_state_restore_backup(tmp_path):
     assert isinstance(state, WatcherState)
     assert state.processed == {"key": 100.0}
 
+
 def test_state_mark_max_entries(tmp_path):
     state = WatcherState(path=tmp_path / ".tenor-state.json")
     for i in range(5500):
@@ -355,22 +404,26 @@ def test_state_mark_max_entries(tmp_path):
     # the max is 5000 and it removes the 1000 oldest
     assert len(state.processed) <= 4501
 
+
 def test_main_cli_overrides(capsys):
     from src.watcher import main
-    with patch("src.watcher.watch", return_value=0) as mock_watch:
-        with patch("src.watcher.load_config", return_value={"ingest_dir": "."}):
-            main(["-c", "config.yaml", "-i", "/new/ingest", "-o", "/new/out", "--no-scan", "--audio"])
 
-            mock_watch.assert_called_once()
-            cfg = mock_watch.call_args[0][0]
-            assert cfg["ingest_dir"] == "/new/ingest"
-            assert cfg["output_dir"] == "/new/out"
-            assert cfg["watcher"]["process_existing_on_start"] is False
-            assert cfg["video"]["audio"] is True
+    with (
+        patch("src.watcher.watch", return_value=0) as mock_watch,
+        patch("src.watcher.load_config", return_value={"ingest_dir": "."}),
+    ):
+        main(["-c", "config.yaml", "-i", "/new/ingest", "-o", "/new/out", "--no-scan", "--audio"])
 
-            main(["-c", "config.yaml", "--no-audio"])
-            cfg = mock_watch.call_args[0][0]
-            assert cfg["video"]["audio"] is False
+        mock_watch.assert_called_once()
+        cfg = mock_watch.call_args[0][0]
+        assert cfg["ingest_dir"] == "/new/ingest"
+        assert cfg["output_dir"] == "/new/out"
+        assert cfg["watcher"]["process_existing_on_start"] is False
+        assert cfg["video"]["audio"] is True
+
+        main(["-c", "config.yaml", "--no-audio"])
+        cfg = mock_watch.call_args[0][0]
+        assert cfg["video"]["audio"] is False
 
 
 def test_watcher_state_save_backup_failure(tmp_path, caplog):
@@ -381,10 +434,12 @@ def test_watcher_state_save_backup_failure(tmp_path, caplog):
     state.mark(f)
 
     import logging
+
     caplog.set_level(logging.DEBUG, logger="tenor.watcher")
     with patch("shutil.copy2", side_effect=OSError("Disk full")):
         state.save()
     assert "State-Backup nicht möglich" in caplog.text
+
 
 def test_watcher_state_save_tmp_failure(tmp_path, caplog):
     state_file = tmp_path / ".tenor-state.json"
@@ -392,9 +447,12 @@ def test_watcher_state_save_tmp_failure(tmp_path, caplog):
     f = tmp_path / "video.mp4"
     state.mark(f)
 
-    with patch("pathlib.Path.replace", side_effect=Exception("Replace failed")):
-        with pytest.raises(Exception):
-            state.save()
+    with (
+        patch("pathlib.Path.replace", side_effect=Exception("Replace failed")),
+        pytest.raises(Exception, match="Replace failed"),
+    ):
+        state.save()
+
 
 def test_wait_until_stable_oserror(tmp_path, caplog):
     f = tmp_path / "test.mp4"
@@ -403,6 +461,7 @@ def test_wait_until_stable_oserror(tmp_path, caplog):
     with patch("src.watcher.get_stat", side_effect=OSError("Permission denied")):
         assert wait_until_stable(f, stable_seconds=1, poll=0) is False
 
+
 def test_state_is_processed_oserror(tmp_path):
     state_file = tmp_path / ".tenor-state.json"
     state = WatcherState(path=state_file)
@@ -410,6 +469,7 @@ def test_state_is_processed_oserror(tmp_path):
     f.touch()
     with patch("src.watcher.get_stat", side_effect=OSError):
         assert state.is_processed(f) is False
+
 
 def test_state_mark_oserror(tmp_path):
     state_file = tmp_path / ".tenor-state.json"
@@ -420,8 +480,10 @@ def test_state_mark_oserror(tmp_path):
         state.mark(f)
         assert len(state.processed) == 0
 
+
 def test_note_failure_no_limit(tmp_path, caplog):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path), "watcher": {"retry_limit": 0}}
     p = IngestProcessor(cfg)
     f1 = tmp_path / "video1.mp4"
@@ -432,18 +494,20 @@ def test_note_failure_no_limit(tmp_path, caplog):
 
 def test_on_file_event_already_processed(tmp_path):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path)}
     p = IngestProcessor(cfg)
     f = tmp_path / "video.mp4"
     f.touch()
 
-    with patch.object(p.state, "is_processed", return_value=True):
-        with patch("threading.Thread") as mock_thread:
-            p.on_file_event(f)
-            mock_thread.assert_not_called()
+    with patch.object(p.state, "is_processed", return_value=True), patch("threading.Thread") as mock_thread:
+        p.on_file_event(f)
+        mock_thread.assert_not_called()
+
 
 def test_on_file_event_already_pending(tmp_path):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path)}
     p = IngestProcessor(cfg)
     f = tmp_path / "video.mp4"
@@ -455,8 +519,10 @@ def test_on_file_event_already_pending(tmp_path):
         p.on_file_event(f)
         mock_thread.assert_not_called()
 
+
 def test_settle_and_collect_stops(tmp_path):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path)}
     p = IngestProcessor(cfg)
     f = tmp_path / "video.mp4"
@@ -467,8 +533,10 @@ def test_settle_and_collect_stops(tmp_path):
         p._settle_and_collect(f)
         mock_wait.assert_not_called()
 
+
 def test_await_batch_window_stops(tmp_path):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path)}
     p = IngestProcessor(cfg)
     p._stop.set()
@@ -476,8 +544,10 @@ def test_await_batch_window_stops(tmp_path):
     # Just checking it doesn't block
     p._await_batch_window()
 
+
 def test_await_batch_window_wait(tmp_path):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path), "watcher": {"batch_window": 1}}
     p = IngestProcessor(cfg)
     f = tmp_path / "video.mp4"
@@ -486,13 +556,18 @@ def test_await_batch_window_wait(tmp_path):
     p._last_added = 0
 
     time_values = [0.5, 1.5, 1.5]
-    def dummy_time(): return time_values.pop(0) if time_values else 2
 
-    with patch("time.monotonic", side_effect=dummy_time):
-        with patch("time.sleep") as mock_sleep:
-            with patch("src.watcher.size_stable", side_effect=[False, True]):
-                p._await_batch_window()
-                mock_sleep.assert_called_once()
+    def dummy_time():
+        return time_values.pop(0) if time_values else 2
+
+    with (
+        patch("time.monotonic", side_effect=dummy_time),
+        patch("time.sleep") as mock_sleep,
+        patch("src.watcher.size_stable", side_effect=[False, True]),
+    ):
+        p._await_batch_window()
+        mock_sleep.assert_called_once()
+
 
 def test_watcher_state_save_oserror(tmp_path, caplog):
     state_file = tmp_path / ".tenor-state.json"
@@ -504,8 +579,10 @@ def test_watcher_state_save_oserror(tmp_path, caplog):
         state.save()
     assert "State-Datei nicht schreibbar" in caplog.text
 
+
 def test_cleanup_partials_oserror(tmp_path, caplog):
     from src.watcher import IngestProcessor
+
     cfg = {"output_dir": str(tmp_path)}
     p = IngestProcessor(cfg)
     part = tmp_path / "video.part.mp4"
@@ -515,33 +592,30 @@ def test_cleanup_partials_oserror(tmp_path, caplog):
         p.cleanup_partials()
     assert "Renderdatei nicht löschbar" in caplog.text
 
-def test_signal_shutdown(tmp_path):
-    from src.watcher import watch
-    import threading
-    cfg = {"ingest_dir": str(tmp_path)}
 
+def test_signal_shutdown(tmp_path):
     # We will patch threading.Event.wait to send a signal to the process instead of blocking forever
     # But wait, watch installs signal handlers and blocks on stopping.wait(1.0)
     # Let's mock time.sleep or Event.wait
 
     def mock_wait(self, timeout):
-        import signal
-        import os
         # call the handler directly since signal mocking can be tricky
-        from src.watcher import watch
-        import sys
         # the problem is _shutdown is internal to watch.
         pass
 
-    with patch("watchdog.observers.Observer.start"):
-        with patch("watchdog.observers.Observer.stop"):
-            with patch("watchdog.observers.Observer.join"):
-                # Can we just simulate raising KeyboardInterrupt which is how sigint is sometimes handled?
-                # The code sets signal handlers. We can just invoke os.kill
-                pass
+    with (
+        patch("watchdog.observers.Observer.start"),
+        patch("watchdog.observers.Observer.stop"),
+        patch("watchdog.observers.Observer.join"),
+    ):
+        # Can we just simulate raising KeyboardInterrupt which is how sigint is sometimes handled?
+        # The code sets signal handlers. We can just invoke os.kill
+        pass
+
 
 def test_may_retry_branches(tmp_path):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path), "watcher": {"retry_limit": 2, "retry_backoff": 10}}
     p = IngestProcessor(cfg)
     f1 = tmp_path / "video1.mp4"
@@ -558,8 +632,10 @@ def test_may_retry_branches(tmp_path):
     p._failed_at[p.state.key(f1)] = 0
     assert p._may_retry(f1) is True
 
+
 def test_note_failure_limit_reached(tmp_path, caplog):
     from src.watcher import IngestProcessor
+
     cfg = {"ingest_dir": str(tmp_path), "watcher": {"retry_limit": 1}}
     p = IngestProcessor(cfg)
     f1 = tmp_path / "video1.mp4"
@@ -575,23 +651,21 @@ def test_note_failure_limit_reached(tmp_path, caplog):
 
 def test_watch_signals(tmp_path):
     import signal
+
     from src.watcher import watch
-    import threading
 
     cfg = {"ingest_dir": str(tmp_path)}
-
-    real_signal = signal.signal
     handlers = {}
+
     def mock_signal(sig, handler):
         handlers[sig] = handler
 
-    with patch("signal.signal", side_effect=mock_signal):
-        with patch("watchdog.observers.Observer"):
-            # Mock Event.wait to trigger the shutdown
-            def mock_wait(self, timeout=None):
-                if signal.SIGINT in handlers:
-                    handlers[signal.SIGINT](signal.SIGINT, None)
-                return True
+    with patch("signal.signal", side_effect=mock_signal), patch("watchdog.observers.Observer"):
+        # Mock Event.wait to trigger the shutdown
+        def mock_wait(self, timeout=None):
+            if signal.SIGINT in handlers:
+                handlers[signal.SIGINT](signal.SIGINT, None)
+            return True
 
-            with patch("threading.Event.wait", mock_wait):
-                assert watch(cfg) == 0
+        with patch("threading.Event.wait", mock_wait):
+            assert watch(cfg) == 0
