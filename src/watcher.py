@@ -529,13 +529,16 @@ class IngestProcessor:
             return 0
         removed = 0
         # Alle Endungen, nicht nur .mp4 - naming.extension ist konfigurierbar.
-        for part in self.output_dir.rglob("*.part.*"):
-            try:
-                part.unlink()
-                removed += 1
-                log.info("Verwaiste Renderdatei entfernt: %s", part.name)
-            except OSError as exc:
-                log.warning("Renderdatei nicht löschbar (%s): %s", part.name, exc)
+        for root, _, files in os.walk(self.output_dir):
+            for file in files:
+                if ".part." in file:
+                    part = Path(root) / file
+                    try:
+                        part.unlink()
+                        removed += 1
+                        log.info("Verwaiste Renderdatei entfernt: %s", part.name)
+                    except OSError as exc:
+                        log.warning("Renderdatei nicht löschbar (%s): %s", part.name, exc)
         return removed
 
 
