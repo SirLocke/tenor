@@ -1,4 +1,3 @@
-import json
 import math
 import subprocess
 from datetime import UTC, datetime
@@ -56,6 +55,7 @@ def test_clipinfo_properties_no_mtime(mock_stat):
     assert clip.date_label == ""
     assert clip.time_label == ""
 
+
 def test_to_float():
     assert _to_float(42.5) == 42.5
     assert _to_float("42.5") == 42.5
@@ -101,6 +101,7 @@ def test_dms_to_deg():
     # Empty minutes/seconds
     assert _dms_to_deg("53", "", "", "N") == 53.0
 
+
 @patch("subprocess.run")
 def test_ffprobe_json_success(mock_run):
     mock_run.return_value = MagicMock(returncode=0, stdout=b'{"format": {"duration": "10.0"}}')
@@ -127,7 +128,7 @@ def test_ffprobe_json_timeout(mock_run):
 
 @patch("subprocess.run")
 def test_ffprobe_json_invalid_json(mock_run):
-    mock_run.return_value = MagicMock(returncode=0, stdout=b'{invalid json')
+    mock_run.return_value = MagicMock(returncode=0, stdout=b"{invalid json")
 
     result = ffprobe_json("test.mp4")
     assert result is None
@@ -135,10 +136,11 @@ def test_ffprobe_json_invalid_json(mock_run):
 
 @patch("subprocess.run")
 def test_ffprobe_json_non_zero_exit(mock_run):
-    mock_run.return_value = MagicMock(returncode=1, stdout=b'', stderr=b'error occurred')
+    mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"error occurred")
 
     result = ffprobe_json("test.mp4")
     assert result is None
+
 
 @patch("src.metadata.probe_clip")
 def test_collect_clips_basic(mock_probe, tmp_path):
@@ -154,6 +156,7 @@ def test_collect_clips_basic(mock_probe, tmp_path):
     # Mock probe_clip to return predictable ClipInfo
     def fake_probe(path, **kwargs):
         return ClipInfo(path=Path(path), duration=5.0)
+
     mock_probe.side_effect = fake_probe
 
     # We test both dir scanning and explicit file providing
