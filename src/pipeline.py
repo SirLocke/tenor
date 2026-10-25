@@ -389,9 +389,9 @@ def build_segments(
 # --------------------------------------------------------------------------- #
 # Rendering
 def is_valid_video(path: Path) -> bool:
+    """Prüft mit ffprobe, ob eine Videodatei lesbar und nicht korrupt ist."""
     from .metadata import FFPROBE, FFPROBE_TIMEOUT, RAW_VIDEO_SUFFIXES
 
-    """Prüft mit ffprobe, ob eine Videodatei lesbar und nicht korrupt ist."""
     try:
         cmd = [
             FFPROBE,
@@ -415,6 +415,8 @@ def is_valid_video(path: Path) -> bool:
             check=True,
         )
         return "video" in result.stdout.decode().strip()
+    except subprocess.TimeoutExpired:
+        return False
     except (subprocess.SubprocessError, OSError, ValueError):
         return False
 
@@ -426,10 +428,12 @@ def has_audio_stream(path: Path) -> bool:
     vorhanden war - der Stream fehlt dann aber. Für den Export-Log ist der
     Unterschied der ganze Punkt: entweder das Reel ist hörbar oder nicht.
     """
+    from .metadata import FFPROBE, FFPROBE_TIMEOUT
+
     try:
         result = subprocess.run(
             [
-                "ffprobe",
+                FFPROBE,
                 "-v",
                 "error",
                 "-select_streams",
@@ -442,10 +446,12 @@ def has_audio_stream(path: Path) -> bool:
                 str(path),
             ],
             capture_output=True,
-            timeout=15,
+            timeout=FFPROBE_TIMEOUT,
             check=True,
         )
         return result.stdout.decode().strip() == "audio"
+    except subprocess.TimeoutExpired:
+        return False
     except (subprocess.SubprocessError, OSError, ValueError):
         return False
 
@@ -455,10 +461,12 @@ def probe_duration(path: Path) -> float | None:
 
     Genauer als der Schnittplan, wenn einzelne Cuts ausgefallen sind.
     """
+    from .metadata import FFPROBE, FFPROBE_TIMEOUT
+
     try:
         result = subprocess.run(
             [
-                "ffprobe",
+                FFPROBE,
                 "-v",
                 "error",
                 "-select_streams",
@@ -471,11 +479,13 @@ def probe_duration(path: Path) -> float | None:
                 str(path),
             ],
             capture_output=True,
-            timeout=15,
+            timeout=FFPROBE_TIMEOUT,
             check=True,
         )
         value = float(result.stdout.decode().strip())
         return value if math.isfinite(value) and value > 0 else None
+    except subprocess.TimeoutExpired:
+        return None
     except (subprocess.SubprocessError, OSError, ValueError):
         return None
 
@@ -494,6 +504,7 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
     import tempfile
 
     from moviepy import VideoFileClip
+    from .metadata import FFPROBE, FFPROBE_TIMEOUT
 
     def _validated(clip: Any) -> Any:
         """Größenprüfung - der Reader ist ab hier schon offen (ffmpeg läuft)."""
@@ -504,7 +515,7 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
 
     # Prüfen ob 10-Bit-HEVC -> dann nach 8-Bit transkodieren
     probe_cmd = [
-        "ffprobe",
+        FFPROBE,
         "-v",
         "error",
         "-select_streams",
@@ -518,7 +529,7 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
     ]
     tmp_path: Path | None = None
     try:
-        result = subprocess.run(probe_cmd, capture_output=True, timeout=10, check=True)
+        result = subprocess.run(probe_cmd, capture_output=True, timeout=FFPROBE_TIMEOUT, check=True)
         out = result.stdout.decode().strip()
         if "yuv420p10le" in out or "p010le" in out:
             # 10-Bit -> temporär nach 8-Bit transkodieren
@@ -559,13 +570,15 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
 
             clip.close = close_and_cleanup
             return clip
-    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError) as exc:
         # WICHTIG: bei jedem Fehlschlag das Zwischenfile löschen. moviepy
         # räumt nichts auf (Clip.__del__ ist absichtlich ein no-op), sonst
         # wächst /tmp bei jeder kaputten Datei um ein Vielfaches.
         if tmp_path is not None:
             tmp_path.unlink(missing_ok=True)
             tmp_path = None
+        if isinstance(exc, subprocess.TimeoutExpired):
+            raise ValueError(f"ffprobe timeout für {path}") from exc
     except BaseException:
         if tmp_path is not None:
             tmp_path.unlink(missing_ok=True)
