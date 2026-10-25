@@ -2103,13 +2103,14 @@ def export_reel(
             else:
                 final.write_videofile(str(partial), **write_kwargs)
 
+        beat_caches = list(partial.parent.glob("*.beat-cache"))
         try:
             _attempt_export(bool(video_cfg.get("lossless")))
         except Exception as exc:
             partial.unlink(missing_ok=True)
             temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
             temp_audio.unlink(missing_ok=True)
-            for bc in partial.parent.glob("*.beat-cache"):
+            for bc in beat_caches:
                 bc.unlink(missing_ok=True)
             if bool(video_cfg.get("lossless")):
                 log.warning("Lossless-Export fehlgeschlagen, versuche Standard-Export: %s", exc)
@@ -2119,7 +2120,7 @@ def export_reel(
                     log.exception("Export nach %s fehlgeschlagen: %s", partial, exc2)
                     partial.unlink(missing_ok=True)
                     temp_audio.unlink(missing_ok=True)
-                    for bc in partial.parent.glob("*.beat-cache"):
+                    for bc in beat_caches:
                         bc.unlink(missing_ok=True)
                     if errors_seen is not None:
                         errors_seen.append(f"Export fehlgeschlagen: {exc2}")
@@ -2134,8 +2135,12 @@ def export_reel(
         partial.unlink(missing_ok=True)
         temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
         temp_audio.unlink(missing_ok=True)
-        for bc in partial.parent.glob("*.beat-cache"):
-            bc.unlink(missing_ok=True)
+        if "beat_caches" in locals():
+            for bc in beat_caches:
+                bc.unlink(missing_ok=True)
+        else:
+            for bc in partial.parent.glob("*.beat-cache"):
+                bc.unlink(missing_ok=True)
         raise
     finally:
         _close_all([final])
