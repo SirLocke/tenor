@@ -1967,7 +1967,7 @@ def export_reel(
     fingerprint = _compute_fingerprint(segments, music, grade, title, subtitle)
 
     if not dry_run:
-        for fp_file in out_dir.glob("*.fingerprint"):
+        for fp_file in list(out_dir.glob("*.fingerprint")):
             try:
                 if fp_file.read_text().strip() == fingerprint:
                     candidate = fp_file.with_suffix("")
@@ -2109,7 +2109,7 @@ def export_reel(
             partial.unlink(missing_ok=True)
             temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
             temp_audio.unlink(missing_ok=True)
-            for bc in partial.parent.glob("*.beat-cache"):
+            for bc in list(partial.parent.glob("*.beat-cache")):
                 bc.unlink(missing_ok=True)
             if bool(video_cfg.get("lossless")):
                 log.warning("Lossless-Export fehlgeschlagen, versuche Standard-Export: %s", exc)
@@ -2119,7 +2119,7 @@ def export_reel(
                     log.exception("Export nach %s fehlgeschlagen: %s", partial, exc2)
                     partial.unlink(missing_ok=True)
                     temp_audio.unlink(missing_ok=True)
-                    for bc in partial.parent.glob("*.beat-cache"):
+                    for bc in list(partial.parent.glob("*.beat-cache")):
                         bc.unlink(missing_ok=True)
                     if errors_seen is not None:
                         errors_seen.append(f"Export fehlgeschlagen: {exc2}")
@@ -2134,7 +2134,7 @@ def export_reel(
         partial.unlink(missing_ok=True)
         temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
         temp_audio.unlink(missing_ok=True)
-        for bc in partial.parent.glob("*.beat-cache"):
+        for bc in list(partial.parent.glob("*.beat-cache")):
             bc.unlink(missing_ok=True)
         raise
     finally:
