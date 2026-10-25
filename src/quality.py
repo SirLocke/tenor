@@ -34,8 +34,6 @@ import json
 import logging
 import math
 import os
-import subprocess
-import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -319,6 +317,7 @@ def _extract_and_score_strip(
     res_signatures = np.array(all_signatures, dtype=np.float32)
 
     return (res_sharpness, res_luma, res_black, res_white, res_signatures), None
+
 
 def _cache_key(path: Path, cfg: QualityConfig) -> str:
     """Cache-Key aus Pfad, mtime, Größe und Analyse-Parametern."""
