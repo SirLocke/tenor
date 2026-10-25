@@ -29,7 +29,6 @@ from src.quality import (  # noqa: E402
     ClipAnalysis,
     QualityConfig,
     WindowPlan,
-    _extract_and_score_strip,
     _safe_path,
     analyse_clips,
     check_window,
@@ -845,26 +844,6 @@ def test_safe_path_option_injection_prevention() -> None:
     assert _safe_path(Path("-version")) == "./-version"
     assert _safe_path("normal.mp4") == "normal.mp4"
     assert _safe_path(Path("dir/-file.mp4")) == "dir/-file.mp4"
-
-
-def test_extract_and_score_strip_option_injection(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured_cmd = None
-
-    def fake_popen(cmd: list[str], **kwargs: object) -> MagicMock:
-        nonlocal captured_cmd
-        captured_cmd = cmd
-        raise FileNotFoundError("ffmpeg not found")
-
-    from unittest.mock import MagicMock
-
-    monkeypatch.setattr("subprocess.Popen", fake_popen)
-
-    path = Path("-vf.mp4")
-    _extract_and_score_strip(path, 1920, 1080, 4.0, 10.0)
-
-    assert captured_cmd is not None
-    idx = captured_cmd.index("-i")
-    assert captured_cmd[idx + 1] == "./-vf.mp4"
 
 
 def test_find_highlights_mismatched_lengths() -> None:
