@@ -252,46 +252,15 @@ def _safe_path(path: Path | str) -> str:
 def _extract_and_score_strip(
     path: Path, width: int, height: int, sample_fps: float, timeout: float
 ) -> tuple[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray], str | None]:
-    """Ein ffmpeg-Durchlauf, der in Batches dekodiert und bewertet, um RAM zu sparen."""
+    """Ein OpenCV-Durchlauf, der Frames dekodiert und bewertet."""
     strip_w, strip_h = _strip_size(width, height)
-    cmd = [
-        "ffmpeg",
-        "-v",
-        "error",
-        "-nostdin",
-        "-i",
-        _safe_path(path),
-        "-an",
-        "-sn",
-        "-dn",
-        "-vf",
-        f"fps={sample_fps},scale={strip_w}:{strip_h}",
-        "-pix_fmt",
-        "gray",
-        "-f",
-        "rawvideo",
-        "-",
-    ]
     frame_size = strip_w * strip_h
     if frame_size <= 0:
         return _empty_stats(), "invalid strip size"
 
-    try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except FileNotFoundError:
-        return _empty_stats(), "ffmpeg nicht gefunden"
-
-    batch_frames = 64
-
-    timeout_expired = False
-
-    def kill_proc() -> None:
-        nonlocal timeout_expired
-        timeout_expired = True
-        proc.kill()
-
-    timer = threading.Timer(timeout, kill_proc)
-    timer.start()
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        return _empty_stats(), "VideoCapture konnte Datei nicht öffnen"
 
     all_sharpness = []
     all_luma = []
@@ -299,91 +268,57 @@ def _extract_and_score_strip(
     all_white = []
     all_signatures = []
 
-    buffer = bytearray()
-
-    def process_batch(frames: np.ndarray) -> None:
-        count = frames.shape[0]
-        sharpness = np.zeros(count, dtype=np.float32)
-        luma = np.zeros(count, dtype=np.float32)
-        black = np.zeros(count, dtype=np.float32)
-        white = np.zeros(count, dtype=np.float32)
-        signatures = np.zeros((count, SIGNATURE_SIZE * SIGNATURE_SIZE), dtype=np.float32)
-
-        for index in range(count):
-            frame = frames[index]
-            laplacian = cv2.Laplacian(frame, cv2.CV_32F, ksize=3)
-            sharpness[index] = float(laplacian.var())
-            luma[index] = float(frame.mean())
-            black[index] = float((frame < 16).mean())
-            white[index] = float((frame > 240).mean())
-            small = cv2.resize(frame, (SIGNATURE_SIZE, SIGNATURE_SIZE), interpolation=cv2.INTER_AREA)
-            signatures[index] = small.astype(np.float32).ravel()
-
-        all_sharpness.append(sharpness)
-        all_luma.append(luma)
-        all_black.append(black)
-        all_white.append(white)
-        all_signatures.append(signatures)
-
-    stderr_output = []
-
-    def read_stderr() -> None:
-        if proc.stderr:
-            stderr_output.append(proc.stderr.read())
-
-    stderr_thread = threading.Thread(target=read_stderr)
-    stderr_thread.start()
-
     try:
+        source_fps = cap.get(cv2.CAP_PROP_FPS)
+        if source_fps <= 0:
+            source_fps = 30.0
+
+        # Berechne wie viele Source Frames für 1 Sample Frame übersprungen werden müssen.
+        # Um bei sample_fps zu bleiben.
+        frame_interval = max(1.0, source_fps / sample_fps)
+
+        current_frame = 0.0
         while True:
-            chunk = proc.stdout.read(65536)
-            if not chunk:
+            ret, frame = cap.read()
+            if not ret:
                 break
-            buffer.extend(chunk)
 
-            count = len(buffer) // frame_size
-            if count >= batch_frames:
-                bytes_to_process = count * frame_size
-                raw = buffer[:bytes_to_process]
-                del buffer[:bytes_to_process]
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            small = cv2.resize(gray, (strip_w, strip_h), interpolation=cv2.INTER_AREA)
 
-                frames = np.frombuffer(raw, dtype=np.uint8).reshape(count, strip_h, strip_w)
-                process_batch(frames)
+            laplacian = cv2.Laplacian(small, cv2.CV_32F, ksize=3)
+            all_sharpness.append(float(laplacian.var()))
+            all_luma.append(float(small.mean()))
+            all_black.append(float((small < 16).mean()))
+            all_white.append(float((small > 240).mean()))
 
-        count = len(buffer) // frame_size
-        if count > 0:
-            bytes_to_process = count * frame_size
-            raw = buffer[:bytes_to_process]
-            del buffer[:bytes_to_process]
+            sig_small = cv2.resize(small, (SIGNATURE_SIZE, SIGNATURE_SIZE), interpolation=cv2.INTER_AREA)
+            all_signatures.append(sig_small.astype(np.float32).ravel())
 
-            frames = np.frombuffer(raw, dtype=np.uint8).reshape(count, strip_h, strip_w)
-            process_batch(frames)
+            current_frame += frame_interval
 
+            # Skip frames using grab instead of cap.set for performance
+            frames_to_skip = int(current_frame) - int(current_frame - frame_interval) - 1
+            if frames_to_skip > 0:
+                for _ in range(frames_to_skip):
+                    if not cap.grab():
+                        break
+
+    except Exception as e:
+        log.warning("Fehler beim Dekodieren von %s: %s", path.name, e)
     finally:
-        timer.cancel()
-        proc.kill()
-        proc.wait()
-        stderr_thread.join()
-
-    if timeout_expired:
-        return _empty_stats(), f"ffmpeg-Timeout nach {timeout:.0f}s"
-
-    if proc.returncode != 0 and len(all_sharpness) == 0:
-        err_bytes = stderr_output[0] if stderr_output else b""
-        detail = err_bytes.decode("utf-8", "replace").strip()[:200]
-        return _empty_stats(), detail or f"ffmpeg rc={proc.returncode}"
+        cap.release()
 
     if len(all_sharpness) == 0:
         return _empty_stats(), "keine Frames dekodiert"
 
-    res_sharpness = np.concatenate(all_sharpness)
-    res_luma = np.concatenate(all_luma)
-    res_black = np.concatenate(all_black)
-    res_white = np.concatenate(all_white)
-    res_signatures = np.concatenate(all_signatures)
+    res_sharpness = np.array(all_sharpness, dtype=np.float32)
+    res_luma = np.array(all_luma, dtype=np.float32)
+    res_black = np.array(all_black, dtype=np.float32)
+    res_white = np.array(all_white, dtype=np.float32)
+    res_signatures = np.array(all_signatures, dtype=np.float32)
 
     return (res_sharpness, res_luma, res_black, res_white, res_signatures), None
-
 
 def _cache_key(path: Path, cfg: QualityConfig) -> str:
     """Cache-Key aus Pfad, mtime, Größe und Analyse-Parametern."""
