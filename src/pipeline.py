@@ -504,6 +504,7 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
     import tempfile
 
     from moviepy import VideoFileClip
+
     from .metadata import FFPROBE, FFPROBE_TIMEOUT
 
     def _validated(clip: Any) -> Any:
