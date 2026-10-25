@@ -1977,6 +1977,7 @@ def export_reel(
             )
 
     stem = build_output_name(cfg, title, when, day)
+    stem = f"{stem}_{fingerprint[:8]}"
     suffix = str(get(cfg, "naming.extension", ".mp4") or ".mp4")
     target = unique_path(out_dir, stem, suffix)
     # Staging-Datei trägt dieselbe Endung wie das Ziel, sonst räumt
