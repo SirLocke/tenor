@@ -2,7 +2,7 @@
 # Build: docker build -t tenor .
 # Run: docker run --rm -v /host/ingest:/data/ingest -v /host/output:/data/output tenor
 
-FROM python:3.14-slim-bookworm
+FROM python:3.15-slim-bookworm
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
