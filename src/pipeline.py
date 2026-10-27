@@ -1635,6 +1635,15 @@ def run(
     )
     geocoder.save_cache()
 
+    for c in clips:
+        if c.rotation in (90, 270):
+            c.width, c.height = c.height, c.width
+            log.info(
+                "Clip %s rotiert um %d Grad: Display-Größe ist %dx%d", c.name, c.rotation, c.width, c.height
+            )
+            # Mark it so we don't swap it again (idempotent helper)
+            c.rotation = 0
+
     if limit > 0:
         clips = clips[:limit]
     if not clips:

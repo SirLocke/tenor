@@ -6,6 +6,7 @@ Alle Funktionen sind fehlertolerant: kaputte oder unlesbare Dateien liefern
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -76,6 +77,7 @@ class ClipInfo:
     place: str | None = None
     width: int = 0
     height: int = 0
+    rotation: int = 0
     fps: float = 0.0
     has_geo: bool = False
     error: str | None = None
@@ -126,6 +128,7 @@ class ClipInfo:
             "place": self.place,
             "width": self.width,
             "height": self.height,
+            "rotation": self.rotation,
             "fps": self.fps,
             "has_geo": self.has_geo,
             "error": self.error,
@@ -478,6 +481,28 @@ def probe_clip(path: str | Path, *, future_tolerance: float = 86400.0) -> ClipIn
         if clip.width == 0:
             clip.width = int(_to_float(stream.get("width")) or 0)
             clip.height = int(_to_float(stream.get("height")) or 0)
+
+            # Get rotation
+            rot = 0.0
+            tags = stream.get("tags", {})
+            if "rotate" in tags:
+                with contextlib.suppress(ValueError):
+                    rot = float(tags["rotate"])
+            else:
+                for sd in stream.get("side_data_list", []):
+                    if sd.get("side_data_type") == "Display Matrix" and "rotation" in sd:
+                        with contextlib.suppress(ValueError):
+                            rot = float(sd["rotation"])
+                        break
+                else:
+                    fmt_tags = fmt_dict.get("tags", {})
+                    if "rotate" in fmt_tags:
+                        with contextlib.suppress(ValueError):
+                            rot = float(fmt_tags["rotate"])
+
+            # Normalize to 0, 90, 180, 270
+            rot = round(rot) % 360
+            clip.rotation = rot
         if clip.fps == 0.0:
             rate = str(stream.get("avg_frame_rate") or stream.get("r_frame_rate") or "0/1")
             try:
