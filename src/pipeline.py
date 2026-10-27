@@ -608,6 +608,8 @@ def build_segment_clip(
     sources: list[Any] | None = None,
     with_audio: bool = False,
 ) -> Any:
+    width &= ~1
+    height &= ~1
     """Rendert einen Cut: Crop -> Grading -> Text-Overlay.
 
     ``sources`` sammelt die geöffneten Quell-Clips. moviepy liest Frames
@@ -699,6 +701,8 @@ def render_segments(
     video_cfg = get(cfg, "video", {}) or {}
     fps = int(video_cfg.get("fps", 30))
     width, height = target_size(cfg)
+    width &= ~1
+    height &= ~1
     failures = on_error if on_error is not None else []
 
     sources: list[Any] = []
@@ -968,6 +972,8 @@ def mix_music(
 def make_overlay_array(cfg: Mapping[str, Any], title: str, subtitle: str, geo_tag: str = "") -> np.ndarray:
     """Text-Overlay als RGBA-Numpy-Array für ``ImageClip``."""
     width, height = target_size(cfg)
+    width &= ~1
+    height &= ~1
     image = build_text_overlay(
         cfg, title=title, subtitle=subtitle, geo_tag=geo_tag, width=width, height=height
     )
@@ -988,6 +994,9 @@ def write_cover(
     height: int = 1920,
 ) -> Path | None:
     """Erzeugt ein 1080x1920 Cover-Frame bei Sekunde ``at`` (via ffmpeg)."""
+    width &= ~1
+    height &= ~1
+
     cmd = [
         "ffmpeg",
         "-y",
