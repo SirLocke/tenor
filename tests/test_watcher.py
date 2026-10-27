@@ -249,6 +249,32 @@ def test_on_file_event_triggers_thread(tmp_path):
         mock_thread_instance.start.assert_called_once()
 
 
+def test_on_file_event_duplicate_paths(tmp_path):
+    from src.watcher import IngestProcessor
+
+    cfg = {"ingest_dir": str(tmp_path)}
+    p = IngestProcessor(cfg)
+
+    f1 = tmp_path / "video.mp4"
+    f1.touch()
+
+    f2 = Path(str(tmp_path) + "/./video.mp4")
+
+    with patch("threading.Thread") as mock_thread:
+        mock_thread_instance = MagicMock()
+        mock_thread.return_value = mock_thread_instance
+
+        p.on_file_event(f1)
+        assert len(p._pending) == 1
+
+        # Essentially the same file but different Path object representation
+        p.on_file_event(f2)
+
+        # Should not start a new thread for the same file
+        assert mock_thread.call_count == 1
+        assert len(p._pending) == 1
+
+
 def test_main_config_error():
     from src.watcher import main
 
