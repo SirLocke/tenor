@@ -332,6 +332,7 @@ class IngestProcessor:
 
     def on_file_event(self, path: Path) -> None:
         """Wird vom Handler bei create/move/modify aufgerufen."""
+        path = path.resolve()
         if not is_media(path, self.extensions):
             return
         with self._get_path_lock(path):
