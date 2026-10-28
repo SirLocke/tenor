@@ -17,6 +17,7 @@ import math
 import os
 import re
 import shlex
+import signal
 import statistics
 import subprocess
 import sys
@@ -101,6 +102,55 @@ class RenderResult:
 # --------------------------------------------------------------------------- #
 # Beat-Matching
 # --------------------------------------------------------------------------- #
+
+
+def _cleanup_ffmpeg_children() -> None:
+    """Findet und killt verwaiste ffmpeg-Kindprozesse, um Zombies zu verhindern."""
+    mypid = os.getpid()
+    try:
+        proc = subprocess.Popen(
+            ["ps", "-o", "pid,ppid,command", "--no-headers"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        out, _ = proc.communicate()
+        candidates = []
+        for line in out.decode("utf-8", "replace").splitlines():
+            parts = line.strip().split(None, 2)
+            if len(parts) >= 3:
+                pid_str, ppid_str, cmd = parts
+                if int(ppid_str) == mypid and "ffmpeg" in cmd.lower():
+                    candidates.append(int(pid_str))
+
+        for pid in candidates:
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGTERM)
+
+        if candidates:
+            import time
+
+            time.sleep(0.1)
+            proc2 = subprocess.Popen(
+                ["ps", "-o", "pid,ppid,command", "--no-headers"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            out2, _ = proc2.communicate()
+            for line in out2.decode("utf-8", "replace").splitlines():
+                parts = line.strip().split(None, 2)
+                if len(parts) >= 3:
+                    pid_str, ppid_str, cmd = parts
+                    pid = int(pid_str)
+                    if pid in candidates and int(ppid_str) == mypid and "ffmpeg" in cmd.lower():
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                            os.waitpid(pid, os.WNOHANG)
+                        except OSError:
+                            pass
+    except Exception:
+        pass
+
+
 def detect_beat_durations(music: Path, cut_cfg: Mapping[str, Any]) -> list[float]:
     """Beat-Tracking via librosa -> Liste von Cut-Längen in Sekunden.
 
@@ -408,13 +458,16 @@ def is_valid_video(path: Path) -> bool:
             cmd.extend(["-f", "hevc"])
         cmd.extend(["--", str(path)])
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            timeout=FFPROBE_TIMEOUT,
-            check=True,
-        )
-        return "video" in result.stdout.decode().strip()
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=FFPROBE_TIMEOUT,
+                check=True,
+            )
+            return "video" in result.stdout.decode().strip()
+        finally:
+            _cleanup_ffmpeg_children()
     except subprocess.TimeoutExpired:
         return False
     except (subprocess.SubprocessError, OSError, ValueError):
@@ -431,25 +484,28 @@ def has_audio_stream(path: Path) -> bool:
     from .metadata import FFPROBE, FFPROBE_TIMEOUT
 
     try:
-        result = subprocess.run(
-            [
-                FFPROBE,
-                "-v",
-                "error",
-                "-select_streams",
-                "a:0",
-                "-show_entries",
-                "stream=codec_type",
-                "-of",
-                "csv=p=0",
-                "--",
-                str(path),
-            ],
-            capture_output=True,
-            timeout=FFPROBE_TIMEOUT,
-            check=True,
-        )
-        return result.stdout.decode().strip() == "audio"
+        try:
+            result = subprocess.run(
+                [
+                    FFPROBE,
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "a:0",
+                    "-show_entries",
+                    "stream=codec_type",
+                    "-of",
+                    "csv=p=0",
+                    "--",
+                    str(path),
+                ],
+                capture_output=True,
+                timeout=FFPROBE_TIMEOUT,
+                check=True,
+            )
+            return result.stdout.decode().strip() == "audio"
+        finally:
+            _cleanup_ffmpeg_children()
     except subprocess.TimeoutExpired:
         return False
     except (subprocess.SubprocessError, OSError, ValueError):
@@ -464,26 +520,29 @@ def probe_duration(path: Path) -> float | None:
     from .metadata import FFPROBE, FFPROBE_TIMEOUT
 
     try:
-        result = subprocess.run(
-            [
-                FFPROBE,
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=nw=1:nk=1",
-                "--",
-                str(path),
-            ],
-            capture_output=True,
-            timeout=FFPROBE_TIMEOUT,
-            check=True,
-        )
-        value = float(result.stdout.decode().strip())
-        return value if math.isfinite(value) and value > 0 else None
+        try:
+            result = subprocess.run(
+                [
+                    FFPROBE,
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=nw=1:nk=1",
+                    "--",
+                    str(path),
+                ],
+                capture_output=True,
+                timeout=FFPROBE_TIMEOUT,
+                check=True,
+            )
+            value = float(result.stdout.decode().strip())
+            return value if math.isfinite(value) and value > 0 else None
+        finally:
+            _cleanup_ffmpeg_children()
     except subprocess.TimeoutExpired:
         return None
     except (subprocess.SubprocessError, OSError, ValueError):
@@ -530,8 +589,11 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
     ]
     tmp_path: Path | None = None
     try:
-        result = subprocess.run(probe_cmd, capture_output=True, timeout=FFPROBE_TIMEOUT, check=True)
-        out = result.stdout.decode().strip()
+        try:
+            result = subprocess.run(probe_cmd, capture_output=True, timeout=FFPROBE_TIMEOUT, check=True)
+            out = result.stdout.decode().strip()
+        finally:
+            _cleanup_ffmpeg_children()
         if "yuv420p10le" in out or "p010le" in out:
             # 10-Bit -> temporär nach 8-Bit transkodieren
             with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
@@ -558,7 +620,10 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
             else:
                 transcode_cmd += ["-an"]
             transcode_cmd.append(str(tmp_path))
-            subprocess.run(transcode_cmd, timeout=120, check=True)
+            try:
+                subprocess.run(transcode_cmd, timeout=120, check=True)
+            finally:
+                _cleanup_ffmpeg_children()
             clip = _validated(VideoFileClip(str(tmp_path), audio=with_audio))
             original_close = clip.close
             scratch = tmp_path
@@ -1015,7 +1080,10 @@ def write_cover(
         str(cover),
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=120, check=False)
+        try:
+            proc = subprocess.run(cmd, capture_output=True, timeout=120, check=False)
+        finally:
+            _cleanup_ffmpeg_children()
     except FileNotFoundError:
         log.error("ffmpeg nicht gefunden - kein Cover erzeugt")
         return None
@@ -2119,7 +2187,11 @@ def export_reel(
                     for _ in final.audio.iter_chunks(fps=write_kwargs["audio_fps"]):
                         pass
             else:
-                final.write_videofile(str(partial), **write_kwargs)
+                try:
+                    final.write_videofile(str(partial), **write_kwargs)
+
+                except BaseException:
+                    raise
 
         beat_caches = list(partial.parent.glob("*.beat-cache"))
 
@@ -2161,6 +2233,8 @@ def export_reel(
         _close_all([final])
         _close_all(getattr(final, "tenor_sources", []) or [])
         _close_all([getattr(final, "tenor_music_reader", None)])
+
+        _cleanup_ffmpeg_children()
         temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
         temp_audio.unlink(missing_ok=True)
 
@@ -2227,13 +2301,16 @@ def scan_nextcloud(cfg: Mapping[str, Any], output_dir: Path) -> None:
     timeout = int(nc_cfg.get("timeout", 30) or 0)
     log.info("Nextcloud-Scan: %s", " ".join(cmd))
     try:
-        subprocess.run(
-            cmd,
-            shell=False,
-            timeout=timeout,
-            check=False,
-            capture_output=True,
-        )
+        try:
+            subprocess.run(
+                cmd,
+                shell=False,
+                timeout=timeout,
+                check=False,
+                capture_output=True,
+            )
+        finally:
+            _cleanup_ffmpeg_children()
     except subprocess.TimeoutExpired:
         log.warning("Nextcloud-Scan Timeout nach %ss", timeout)
     except Exception as exc:  # pragma: no cover
