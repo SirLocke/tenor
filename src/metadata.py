@@ -540,6 +540,10 @@ def probe_clip(path: str | Path, *, future_tolerance: float = 86400.0) -> ClipIn
                     pass
         break
 
+    if clip.duration <= 0.0:
+        clip.error = "Ungültige oder fehlende Dauer (<= 0)"
+        return clip
+
     lat, lon = parse_coordinates(geo_raw)
     if lat is None:
         lat, lon = _from_gps_tags(tags)
