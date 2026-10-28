@@ -121,13 +121,13 @@ def test_probe_clip_malformed(mock_ffprobe):
     mock_ffprobe.return_value = {"format": "not_a_dict", "streams": 123}
 
     clip = probe_clip("dummy.mp4")
-    assert clip.error is None
+    assert clip.error == "Ungültige oder fehlende Dauer (<= 0)"
     assert clip.duration == 0.0
 
     # streams is string
     mock_ffprobe.return_value = {"format": {}, "streams": "string_streams"}
     clip2 = probe_clip("dummy.mp4")
-    assert clip2.error is None
+    assert clip2.error == "Ungültige oder fehlende Dauer (<= 0)"
     assert clip2.duration == 0.0
 
 
