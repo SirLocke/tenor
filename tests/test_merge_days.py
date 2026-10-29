@@ -44,6 +44,18 @@ def test_merge_days_without_any_date() -> None:
     assert list(groups) == ["_ohne-datum"]
 
 
+def test_default_groups_without_any_date() -> None:
+    clips = [ClipInfo(path=Path("ohne-datum.mov"), duration=5.0)]
+    groups = group_clips_by_day(clips, merge_days=False)
+    assert list(groups) == ["_ohne-datum"]
+    assert len(groups["_ohne-datum"]) == 1
+
+
+def test_group_clips_empty_list() -> None:
+    assert group_clips_by_day([], merge_days=False) == {}
+    assert group_clips_by_day([], merge_days=True) == {"_ohne-datum": []}
+
+
 def test_parser_exposes_single_reel_flag() -> None:
     parser = build_parser()
     assert parser.parse_args(["-i", "x.mov", "--single-reel"]).merge_days is True
