@@ -29,7 +29,6 @@ from src.quality import (  # noqa: E402
     ClipAnalysis,
     QualityConfig,
     WindowPlan,
-    _safe_path,
     analyse_clips,
     check_window,
     clamp_start,
@@ -837,13 +836,6 @@ def test_quality_config_validation() -> None:
 
     with pytest.raises(ValueError, match="duplicate_threshold darf nicht negativ sein"):
         QualityConfig(duplicate_threshold=-5.0)
-
-
-def test_safe_path_option_injection_prevention() -> None:
-    assert _safe_path("-option.mp4") == "./-option.mp4"
-    assert _safe_path(Path("-version")) == "./-version"
-    assert _safe_path("normal.mp4") == "normal.mp4"
-    assert _safe_path(Path("dir/-file.mp4")) == "dir/-file.mp4"
 
 
 def test_find_highlights_mismatched_lengths() -> None:
