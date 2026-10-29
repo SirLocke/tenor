@@ -56,6 +56,15 @@ def test_clipinfo_properties_no_mtime(mock_stat):
     assert clip.time_label == ""
 
 
+@patch.object(Path, "stat")
+def test_clipinfo_mtime_error(mock_stat):
+    path = Path("test_video.mp4")
+    mock_stat.side_effect = OSError("File not found")
+    clip = ClipInfo(path=path, created=None)
+
+    assert clip._mtime() is None
+
+
 def test_to_float():
     assert _to_float(42.5) == 42.5
     assert _to_float("42.5") == 42.5
