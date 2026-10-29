@@ -127,11 +127,12 @@ def test_ffprobe_json_timeout(mock_run):
 
 
 @patch("subprocess.run")
-def test_ffprobe_json_invalid_json(mock_run):
+def test_ffprobe_json_invalid_json(mock_run, caplog):
     mock_run.return_value = MagicMock(returncode=0, stdout=b"{invalid json")
 
     result = ffprobe_json("test.mp4")
     assert result is None
+    assert "ffprobe-JSON unlesbar für test.mp4" in caplog.text
 
 
 @patch("subprocess.run")
