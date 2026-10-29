@@ -11,7 +11,6 @@ from src.styling import (
     build_subtitle,
     build_text_overlay,
     center_crop_resize,
-    escape_drawtext_text,
     format_coordinates,
     target_size,
     wrap_text,
@@ -22,21 +21,6 @@ def test_format_coordinates():
     assert format_coordinates(53.5510, 9.9930) == "53.5510° N, 9.9930° E"
     assert format_coordinates(-53.5510, -9.9930) == "53.5510° S, 9.9930° W"
     assert format_coordinates(0.0, 0.0) == "0.0000° N, 0.0000° E"
-
-
-def test_escape_drawtext_text():
-    assert escape_drawtext_text(None) == ""
-    assert escape_drawtext_text("Hello") == "Hello"
-    assert escape_drawtext_text(123) == "123"
-    assert escape_drawtext_text("a\\b") == "a\\\\b"
-    assert escape_drawtext_text("a:b") == "a\\:b"
-    assert escape_drawtext_text("a,b") == "a\\,b"
-    assert escape_drawtext_text("a;b") == "a\\;b"
-    assert escape_drawtext_text("a'b") == "a\\'b"
-    assert escape_drawtext_text("a\nb") == "a\\nb"
-    assert escape_drawtext_text("a\rb") == "a\\rb"
-    # combined
-    assert escape_drawtext_text("a:b,c'd\n") == "a\\:b\\,c\\'d\\n"
 
 
 def test_build_subtitle():

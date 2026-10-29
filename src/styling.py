@@ -492,29 +492,6 @@ def format_coordinates(lat: float, lon: float) -> str:
     return f"{abs(lat):.4f}° {lat_dir}, {abs(lon):.4f}° {lon_dir}"
 
 
-def escape_drawtext_text(text: Any) -> str:
-    """Escapes text for use in ffmpeg's drawtext filter 'text' option.
-
-    Escapes backslashes, colons, commas, semicolons, and single quotes.
-    Also escapes literal newlines and carriage returns.
-    """
-    if text is None:
-        return ""
-    if not isinstance(text, str):
-        text = str(text)
-
-    # Order matters: escape backslashes first
-    text = text.replace("\\", "\\\\")
-    text = text.replace(":", "\\:")
-    text = text.replace(",", "\\,")
-    text = text.replace(";", "\\;")
-    text = text.replace("'", "\\'")
-    text = text.replace("\n", "\\n")
-    text = text.replace("\r", "\\r")
-
-    return text
-
-
 def build_text_overlay(
     cfg: Mapping[str, Any],
     *,

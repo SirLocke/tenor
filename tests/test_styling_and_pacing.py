@@ -344,26 +344,3 @@ class TestResolveFontPath:
 
     def test_empty_config_returns_none(self) -> None:
         assert resolve_font_path({}, "regular") is None
-
-
-class TestEscapeDrawtextText:
-    def test_benign_text(self):
-        from src.styling import escape_drawtext_text
-
-        assert escape_drawtext_text("Hello world") == "Hello world"
-
-    def test_escape_characters(self):
-        from src.styling import escape_drawtext_text
-
-        assert escape_drawtext_text("a\\b:c,d;e'f\ng\rh") == "a\\\\b\\:c\\,d\\;e\\'f\\ng\\rh"
-
-    def test_malicious_exif(self):
-        from src.styling import escape_drawtext_text
-
-        assert escape_drawtext_text("a:b,c;d'e\n\\") == r"a\:b\,c\;d\'e\n\\"
-
-    def test_non_string_input(self):
-        from src.styling import escape_drawtext_text
-
-        assert escape_drawtext_text(None) == ""
-        assert escape_drawtext_text(123) == "123"
