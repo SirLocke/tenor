@@ -696,6 +696,7 @@ def test_watch_signals(tmp_path):
         with patch("threading.Event.wait", mock_wait):
             assert watch(cfg) == 0
 
+
 def test_queue_limit_on_file_event(tmp_path, caplog):
     from src.watcher import IngestProcessor
 

@@ -346,8 +346,15 @@ class IngestProcessor:
             with self._lock:
                 if path in self._pending or path in self._inflight:
                     return
-                if self.max_queue_size > 0 and (len(self._pending) + len(self._inflight)) >= self.max_queue_size:
-                    log.warning("Warteschlange voll (Max %d) - %s wird vorerst ignoriert (Backpressure)", self.max_queue_size, path.name)
+                if (
+                    self.max_queue_size > 0
+                    and (len(self._pending) + len(self._inflight)) >= self.max_queue_size
+                ):
+                    log.warning(
+                        "Warteschlange voll (Max %d) - %s wird vorerst ignoriert (Backpressure)",
+                        self.max_queue_size,
+                        path.name,
+                    )
                     return
                 self._pending.add(path)
                 self._last_added = time.monotonic()
@@ -512,7 +519,11 @@ class IngestProcessor:
                 log.warning("Ingest-Scan übersprungen: Warteschlange bereits voll (Backpressure)")
                 return 0
             if len(fresh) > allowed:
-                log.info("Ingest-Scan deckelt %d unverarbeitete Datei(en) auf %d (Backpressure)", len(fresh), allowed)
+                log.info(
+                    "Ingest-Scan deckelt %d unverarbeitete Datei(en) auf %d (Backpressure)",
+                    len(fresh),
+                    allowed,
+                )
                 fresh = fresh[:allowed]
 
         log.info("Ingest-Scan findet %d unverarbeitete Datei(en)", len(fresh))
