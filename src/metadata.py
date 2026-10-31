@@ -266,6 +266,47 @@ def _parse_datetime(value: str | None, *, future_tolerance: float = 86400.0) -> 
 # --------------------------------------------------------------------------- #
 # Geodaten
 # --------------------------------------------------------------------------- #
+
+def sanitize_filename(filename: str, *, fallback: str = "reel") -> str:
+    """Kürzt und bereinigt einen Dateinamen auf <= 200 Bytes (UTF-8).
+
+    Verhindert ENAMETOOLONG-Fehler bei sehr langen Titeln (z.B. aus EXIF),
+    indem die Basis sauber am UTF-8-Zeichenlimit abgeschnitten wird.
+    Die finale Dateiendung bleibt immer erhalten.
+    """
+    if not filename:
+        return fallback
+
+    parts = filename.rsplit(".", 1)
+    if len(parts) > 1 and parts[1]:
+        base, ext = parts[0], "." + parts[1]
+    else:
+        base, ext = filename, ""
+
+    if not base:
+        base = fallback
+
+    cleaned = re.sub(r"[^\w\s-]", "", base, flags=re.UNICODE)
+    cleaned = re.sub(r"[\s_]+", "_", cleaned).strip(" _-")
+    if not cleaned:
+        cleaned = fallback
+
+    max_bytes = 200
+    ext_bytes = ext.encode("utf-8")
+
+    if len(ext_bytes) >= max_bytes:
+        # Fallback falls die Endung absurd lang ist
+        return ext_bytes[:max_bytes].decode("utf-8", errors="ignore")
+
+    allowed_bytes = max_bytes - len(ext_bytes)
+    base_bytes = cleaned.encode("utf-8")
+
+    if len(base_bytes) > allowed_bytes:
+        cleaned = base_bytes[:allowed_bytes].decode("utf-8", errors="ignore")
+
+    return cleaned + ext
+
+
 def parse_coordinates(value: str | None) -> tuple[float | None, float | None]:
     """Liest ISO-6709 / QuickTime-Koordinaten -> ``(lat, lon)``.
 

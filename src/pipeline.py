@@ -38,7 +38,7 @@ from . import (
     setup_logging,
     slugify,
 )
-from .metadata import ClipInfo, Geocoder, collect_clips, dominant_place, primary_place
+from .metadata import ClipInfo, Geocoder, collect_clips, dominant_place, primary_place, sanitize_filename
 from .quality import (
     ClipAnalysis,
     QualityConfig,
@@ -1244,10 +1244,21 @@ def build_output_dir(
 
 def unique_path(directory: Path, stem: str, suffix: str) -> Path:
     """Vergibt ``stem``, ``stem_2``, ... falls der Name schon existiert."""
-    candidate = directory / f"{stem}{suffix}"
+    candidate = directory / sanitize_filename(f"{stem}{suffix}")
     counter = 2
+
+    seen_names = {candidate.name}
+
     while candidate.exists():
-        candidate = directory / f"{stem}_{counter}{suffix}"
+        safe_name = sanitize_filename(f"{stem}_{counter}{suffix}")
+        candidate = directory / safe_name
+
+        while candidate.name in seen_names:
+            stem = stem[:-10] if len(stem) > 10 else "reel"
+            safe_name = sanitize_filename(f"{stem}_{counter}{suffix}")
+            candidate = directory / safe_name
+
+        seen_names.add(candidate.name)
         counter += 1
     return candidate
 

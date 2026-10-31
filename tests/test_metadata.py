@@ -207,3 +207,45 @@ def test_collect_clips_invalid_extension(tmp_path):
     file1.touch()
     clips = collect_clips([str(file1)], extensions=(".mp4",))
     assert len(clips) == 0
+
+from src.metadata import sanitize_filename
+
+def test_sanitize_filename_basic():
+    assert sanitize_filename("my video title.mp4") == "my_video_title.mp4"
+    assert sanitize_filename("no_extension") == "no_extension"
+
+def test_sanitize_filename_fallback():
+    assert sanitize_filename("") == "reel"
+    assert sanitize_filename("!!!.mp4") == "reel.mp4"
+    assert sanitize_filename("   .mp4") == "reel.mp4"
+
+def test_sanitize_filename_multidot():
+    assert sanitize_filename("archive.tar.gz") == "archivetar.gz"
+    assert sanitize_filename("a.b.c.d") == "abc.d"
+
+def test_sanitize_filename_truncation_ascii():
+    long_base = "a" * 250
+    result = sanitize_filename(f"{long_base}.mp4")
+    assert result == ("a" * 196) + ".mp4"
+    assert len(result.encode("utf-8")) <= 200
+
+def test_sanitize_filename_truncation_unicode():
+    long_base = "ä" * 150 # 'ä' is 2 bytes in UTF-8
+    result = sanitize_filename(f"{long_base}.mp4")
+    # Max bytes is 200. ".mp4" is 4 bytes. Allowed bytes for base is 196.
+    # 196 / 2 = 98 'ä' characters.
+    assert result == ("ä" * 98) + ".mp4"
+    assert len(result.encode("utf-8")) <= 200
+
+def test_sanitize_filename_long_extension():
+    long_ext = "a" * 250
+    result = sanitize_filename(f"base.{long_ext}")
+    assert len(result.encode("utf-8")) <= 200
+    assert result == "." + ("a" * 199)
+
+def test_sanitize_filename_emoji():
+    long_base = "🔥" * 100 # '🔥' is 4 bytes in UTF-8
+    result = sanitize_filename(f"{long_base}.mp4")
+    # Allowed base bytes = 196. 196 / 4 = 49 emojis.
+    assert result == "reel.mp4"
+    assert len(result.encode("utf-8")) <= 200
