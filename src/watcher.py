@@ -298,6 +298,7 @@ class IngestProcessor:
         self.retry_limit = max(int(get(cfg, "watcher.retry_limit", 3) or 0), 0)
         self.retry_backoff = max(float(get(cfg, "watcher.retry_backoff", 300) or 0), 0.0)
         self.rescan_interval = max(float(get(cfg, "watcher.rescan_interval", 300) or 0), 0.0)
+        self.max_queue_size = max(int(get(cfg, "watcher.max_queue_size", 0) or 0), 0)
         self.output_dir = expand_path(get(cfg, "output_dir", "output"))
         # Originalton-Opt-in: der Watcher setzt bei ``--audio``/``--no-audio``
         # ``video.audio`` bereits in der Config; hier nur durchreichen, damit
@@ -345,6 +346,16 @@ class IngestProcessor:
                 log.debug("State-Prüfung fehlgeschlagen (%s): %s", path, exc)
             with self._lock:
                 if path in self._pending or path in self._inflight:
+                    return
+                if (
+                    self.max_queue_size > 0
+                    and (len(self._pending) + len(self._inflight)) >= self.max_queue_size
+                ):
+                    log.warning(
+                        "Warteschlange voll (Max %d) - %s wird vorerst ignoriert (Backpressure)",
+                        self.max_queue_size,
+                        path.name,
+                    )
                     return
                 self._pending.add(path)
                 self._last_added = time.monotonic()
@@ -500,6 +511,22 @@ class IngestProcessor:
         if not fresh:
             log.info("Keine unverarbeiteten Clips im Ingest-Ordner")
             return 0
+
+        if self.max_queue_size > 0:
+            with self._lock:
+                current_size = len(self._pending) + len(self._inflight)
+            allowed = max(0, self.max_queue_size - current_size)
+            if allowed == 0:
+                log.warning("Ingest-Scan übersprungen: Warteschlange bereits voll (Backpressure)")
+                return 0
+            if len(fresh) > allowed:
+                log.info(
+                    "Ingest-Scan deckelt %d unverarbeitete Datei(en) auf %d (Backpressure)",
+                    len(fresh),
+                    allowed,
+                )
+                fresh = fresh[:allowed]
+
         log.info("Ingest-Scan findet %d unverarbeitete Datei(en)", len(fresh))
         self.process_batch(fresh)
         return len(fresh)
