@@ -73,6 +73,7 @@ def is_media(path: Path, extensions: Sequence[str]) -> bool:
         or name.endswith((".part", ".tmp", ".crdownload", "~", ".swp"))
         or "AppleDouble" in name
         or name.startswith("._")
+        or any(ext in path.suffixes for ext in [".part", ".tmp", ".crdownload", "~", ".swp"])
     )
 
 
