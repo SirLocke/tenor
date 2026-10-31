@@ -35,6 +35,14 @@ def test_is_media_with_files(tmp_path):
     f_part.touch()
     assert is_media(f_part, [".mp4"]) is False
 
+    f_part_inner = tmp_path / "video.part.mp4"
+    f_part_inner.touch()
+    assert is_media(f_part_inner, [".mp4"]) is False
+
+    f_crdownload = tmp_path / "video.crdownload.mp4"
+    f_crdownload.touch()
+    assert is_media(f_crdownload, [".mp4"]) is False
+
 
 def test_size_stable_success(tmp_path):
     f = tmp_path / "video.mp4"
