@@ -695,3 +695,40 @@ def test_watch_signals(tmp_path):
 
         with patch("threading.Event.wait", mock_wait):
             assert watch(cfg) == 0
+
+def test_queue_limit_on_file_event(tmp_path, caplog):
+    from src.watcher import IngestProcessor
+
+    cfg = {"ingest_dir": str(tmp_path), "watcher": {"max_queue_size": 2}}
+    p = IngestProcessor(cfg)
+
+    f1 = tmp_path / "video1.mp4"
+    f2 = tmp_path / "video2.mp4"
+    f3 = tmp_path / "video3.mp4"
+    f3.touch()
+
+    p._pending.add(f1)
+    p._inflight.add(f2)
+
+    with patch("threading.Thread") as mock_thread:
+        p.on_file_event(f3)
+        mock_thread.assert_not_called()
+        assert "Warteschlange voll (Max 2)" in caplog.text
+
+
+def test_queue_limit_scan_existing(tmp_path, caplog):
+    from src.watcher import IngestProcessor
+
+    cfg = {"ingest_dir": str(tmp_path), "watcher": {"max_queue_size": 1}}
+    p = IngestProcessor(cfg)
+
+    f1 = tmp_path / "video1.mp4"
+    f2 = tmp_path / "video2.mp4"
+    f1.touch()
+    f2.touch()
+
+    with patch.object(p, "process_batch") as mock_process:
+        assert p.scan_existing() == 1
+        mock_process.assert_called_once()
+        assert len(mock_process.call_args[0][0]) == 1
+        assert "deckelt 2 unverarbeitete Datei(en) auf 1" in caplog.text

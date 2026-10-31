@@ -223,6 +223,7 @@ geocoding:
 watcher:
   debounce_seconds: 5      # Dateigröße muss so lange stabil sein
   batch_window: 12         # nach dem ersten Clip X Sekunden weiter sammeln
+  max_queue_size: 0        # 0 = unbegrenzt, sonst Backpressure, wenn zu viele Dateien auf Verarbeitung warten
   # true = Ingest-Unterordner mitüberwachen. Der Ordnername wird dann als
   # Tripname für den Output verwendet (ingest/Madeira 2026/ -> output/Madeira 2026/).
   recursive: true
