@@ -2125,6 +2125,7 @@ def export_reel(
 
     errors_seen.extend(errors)
     final = rendered[0]
+    beat_caches = list(partial.parent.glob("*.beat-cache"))
     try:
         music_mixed = False
         if music is not None:
@@ -2192,8 +2193,6 @@ def export_reel(
 
                 except BaseException:
                     raise
-
-        beat_caches = list(partial.parent.glob("*.beat-cache"))
 
         try:
             _attempt_export(bool(video_cfg.get("lossless")))
