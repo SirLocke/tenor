@@ -256,12 +256,13 @@ def _extract_and_score_strip(
 
     try:
         source_fps = cap.get(cv2.CAP_PROP_FPS)
-        if source_fps <= 0:
+        if not math.isfinite(source_fps) or source_fps <= 0:
             source_fps = 30.0
 
         # Berechne wie viele Source Frames für 1 Sample Frame übersprungen werden müssen.
         # Um bei sample_fps zu bleiben.
-        frame_interval = max(1.0, source_fps / sample_fps)
+        safe_sample_fps = sample_fps if math.isfinite(sample_fps) and sample_fps > 0 else 4.0
+        frame_interval = max(1.0, source_fps / safe_sample_fps)
 
         current_frame = 0.0
         while True:
