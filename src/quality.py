@@ -474,7 +474,7 @@ def _safe_mean(arr: np.ndarray, default: float = 0.0) -> float:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         m = float(np.nanmean(arr))
-    return default if np.isnan(m) else m
+    return default if not np.isfinite(m) else m
 
 
 def _safe_mean_signature(arr: np.ndarray) -> np.ndarray:
@@ -485,7 +485,7 @@ def _safe_mean_signature(arr: np.ndarray) -> np.ndarray:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         m = np.nanmean(arr, axis=0)
-    return np.nan_to_num(m, nan=0.0).astype(np.float32)
+    return np.nan_to_num(m, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
 
 def window_score(analysis: ClipAnalysis, start: float, end: float, cfg: QualityConfig) -> WindowScore:
@@ -538,6 +538,21 @@ def window_score(analysis: ClipAnalysis, start: float, end: float, cfg: QualityC
 
 def _local_problems(score: WindowScore, cfg: QualityConfig) -> list[str]:
     problems = []
+    # Guard against NaN/Inf metrics that would otherwise cause silent failures
+    if not np.isfinite(score.sharpness):
+        problems.append("unscharf (NaN/Inf sharpness)")
+    if not np.isfinite(score.luma):
+        problems.append("Luma NaN/Inf")
+    if not np.isfinite(score.black_ratio):
+        problems.append("schwarz_ratio NaN/Inf")
+    if not np.isfinite(score.white_ratio):
+        problems.append("weiß_ratio NaN/Inf")
+    if not np.isfinite(score.motion):
+        problems.append("Bewegung NaN/Inf")
+    if not np.isfinite(score.faces):
+        problems.append("Gesichter NaN/Inf")
+    if not np.isfinite(score.color_variance):
+        problems.append("Farbvarianz NaN/Inf")
     if cfg.min_sharpness > 0 and score.sharpness < cfg.min_sharpness:
         problems.append(f"unscharf (Schärfe {score.sharpness:.0f} < {cfg.min_sharpness:.0f})")
     if cfg.min_luma > 0 and score.luma < cfg.min_luma:
