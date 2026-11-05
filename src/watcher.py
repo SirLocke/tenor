@@ -428,33 +428,32 @@ class IngestProcessor:
         # Render serialisieren: parallele Läufe korumpierten sonst die
         # State-Datei und löschten sich gegenseitig die .part-Dateien.
         with self._render_lock:
-            try:
-                result = pipeline.run(
-                    [str(p) for p in files],
-                    config_path=self.config_path,
-                    output_dir=self.output_dir,
-                    delete_after=self.delete_after,
-                    audio=self.audio,
-                )
-            except Exception as exc:
-                log.exception("Pipeline-Lauf fehlgeschlagen: %s", exc)
-                self._note_failure(files)
-                return None
-
-        if result.ok:
-            with self._lock:
-                for path in files:
-                    self._failures.pop(self.state.key(path), None)
-                    self._failed_at.pop(self.state.key(path), None)
             for path in files:
-                if not self.delete_after:
-                    self.state.mark(path)
+                try:
+                    result = pipeline.run(
+                        [str(path)],
+                        config_path=self.config_path,
+                        output_dir=self.output_dir,
+                        delete_after=self.delete_after,
+                        audio=self.audio,
+                    )
+                except Exception as exc:
+                    log.exception("Pipeline-Lauf für %s fehlgeschlagen: %s", path.name, exc)
+                    self._note_failure([path])
+                    continue
+
+                if result.ok:
+                    with self._lock:
+                        self._failures.pop(self.state.key(path), None)
+                        self._failed_at.pop(self.state.key(path), None)
+                    if not self.delete_after:
+                        self.state.mark(path)
+                    for reel in result.outputs or ([result.output] if result.output else []):
+                        log.info("Reel geschrieben: %s", reel)
+                else:
+                    self._note_failure([path])
             self.state.save()
-            for reel in result.outputs or ([result.output] if result.output else []):
-                log.info("Reel geschrieben: %s", reel)
-        else:
-            self._note_failure(files)
-        return result
+        return None
 
     def _note_failure(self, files: Sequence[Path]) -> None:
         """Zählt Fehlversuche, damit ein Batch irgendwann aufgegeben wird."""
