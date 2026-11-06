@@ -68,12 +68,13 @@ def is_media(path: Path, extensions: Sequence[str]) -> bool:
     if path.suffix.lower() not in wanted:
         return False
     name = path.name
+    name_lower = name.lower()
     return not (
-        name.startswith(".")
-        or name.endswith((".part", ".tmp", ".crdownload", "~", ".swp"))
-        or "AppleDouble" in name
-        or name.startswith("._")
-        or any(ext in path.suffixes for ext in [".part", ".tmp", ".crdownload", "~", ".swp"])
+        name_lower.startswith(".")
+        or name_lower.endswith((".part", ".tmp", ".crdownload", "~", ".swp"))
+        or "AppleDouble" in name_lower
+        or name_lower.startswith("._")
+        or any(s.lower() in (".part", ".tmp", ".crdownload", "~", ".swp") for s in path.suffixes)
     )
 
 
