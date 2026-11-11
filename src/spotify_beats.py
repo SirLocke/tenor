@@ -296,7 +296,7 @@ def fetch_spotify_beats(
                             json.dump(cached_data, f)
                         temp_file.replace(cache_file)
                     except OSError:
-                        pass  # Ignore if cache dir is read-only
+                        log.warning("Spotify-Cache-Mtime konnte nicht aktualisiert werden", exc_info=True)
 
                     return beats_hit
         except (ValueError, KeyError, TypeError, OSError, json.JSONDecodeError):
