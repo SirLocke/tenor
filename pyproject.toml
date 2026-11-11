@@ -46,7 +46,7 @@ dependencies = [
     "geopy==2.5.0",
     "PyYAML==6.0.3",
     "requests>=2.31.0",
-    "watchdog==6.0.0",
+    "watchdog==7.1.0",
 ]
 [project.optional-dependencies]
 dev = [
