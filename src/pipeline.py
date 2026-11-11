@@ -883,6 +883,52 @@ def _close_all(clips: Sequence[Any]) -> None:
             clip.close()
 
 
+def _run_with_timeout(
+    func: Any,
+    args: tuple[Any, ...] = (),
+    kwargs: dict[str, Any] | None = None,
+    *,
+    timeout: float = 0.0,
+) -> Any:
+    """Führt *func* in einem Daemon-Thread mit optionaler harter Zeitüberschreitung aus.
+
+    Läuft *timeout* (Sekunden) ab, bevor *func* zurückkehrt, werden verwaiste
+    ffmpeg-Kindprozesse über :func:`_cleanup_ffmpeg_children` getötet und eine
+    :exc:`TimeoutError` ausgelöst, sodass ein hängender Encoder den Render-Worker
+    nicht unbegrenzt blockiert.
+    """
+    if kwargs is None:
+        kwargs = {}
+    if not timeout or timeout <= 0:
+        return func(*args, **kwargs)
+
+    import threading
+
+    result: list[Any] = []
+    exc: list[BaseException] = []
+
+    def _target() -> None:
+        try:
+            result.append(func(*args, **kwargs))
+        except BaseException as e:  # noqa: BLE001
+            exc.append(e)
+
+    thread = threading.Thread(target=_target, daemon=True)
+    thread.start()
+    thread.join(timeout)
+
+    if thread.is_alive():
+        _cleanup_ffmpeg_children()
+        thread.join(0.2)
+        if exc:
+            raise exc[0]
+        raise TimeoutError(f"ffmpeg encode timed out after {timeout}s")
+
+    if exc:
+        raise exc[0]
+    return result[0] if result else None
+
+
 def _match_audio_channels(clip: Any, nchannels: int) -> Any:
     """Bringt eine Tonspur auf eine feste Kanalzahl.
 
@@ -2044,6 +2090,7 @@ def export_reel(
     ``errors_seen`` sammelt Cut-Fehler für den maschinenlesbaren Report.
     """
     video_cfg = get(cfg, "video", {}) or {}
+    encode_timeout = float(video_cfg.get("encode_timeout", 0) or 0)
 
     out_dir = build_output_dir(base_out, cfg, title, when, day)
     if not dry_run:
@@ -2189,7 +2236,12 @@ def export_reel(
                         pass
             else:
                 try:
-                    final.write_videofile(str(partial), **write_kwargs)
+                    _run_with_timeout(
+                        final.write_videofile,
+                        args=(str(partial),),
+                        kwargs=write_kwargs,
+                        timeout=encode_timeout,
+                    )
 
                 except BaseException:
                     raise
