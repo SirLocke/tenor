@@ -345,6 +345,10 @@ class IngestProcessor:
                 if self.state.is_processed(path):
                     log.debug("Bereits verarbeitet, ignoriere: %s", path.name)
                     return
+            except FileNotFoundError:
+                # Datei vor der State-Prüfung gelöscht - Event skippen
+                log.debug("Datei vor Event-Verarbeitung gelöscht: %s", path.name)
+                return
             except Exception as exc:  # pragma: no cover
                 log.debug("State-Prüfung fehlgeschlagen (%s): %s", path, exc)
             with self._lock:
