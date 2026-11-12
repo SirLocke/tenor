@@ -224,6 +224,8 @@ class WatcherState:
     def is_processed(self, path: Path) -> bool:
         try:
             mtime = get_stat(path).st_mtime
+        except FileNotFoundError:
+            raise
         except OSError:
             return False
         with self._lock:
@@ -416,11 +418,17 @@ class IngestProcessor:
 
     def process_batch(self, batch: Sequence[Path]) -> Any:
         """Übergibt einen Batch an die Pipeline und merkt sich den Erfolg."""
-        files = [
-            p
-            for p in batch
-            if is_media(p, self.extensions) and not self.state.is_processed(p) and self._may_retry(p)
-        ]
+        files = []
+        for p in batch:
+            if not is_media(p, self.extensions):
+                continue
+            try:
+                processed = self.state.is_processed(p)
+            except FileNotFoundError:
+                # Datei wurde gelöscht - überspringen
+                continue
+            if not processed and self._may_retry(p):
+                files.append(p)
         if not files:
             log.info("Keine neuen Dateien im Batch - nichts zu tun")
             return None
@@ -508,7 +516,14 @@ class IngestProcessor:
         files = iter_media_files(
             self.ingest_dir, self.extensions, recursive=self.recursive, ignore_dirs=self.ignore_dirs
         )
-        fresh = [p for p in files if not self.state.is_processed(p)]
+        fresh = []
+        for p in files:
+            try:
+                if not self.state.is_processed(p):
+                    fresh.append(p)
+            except FileNotFoundError:
+                # Datei wurde zwischenzeitlich gelöscht - überspringen
+                pass
         if not fresh:
             log.info("Keine unverarbeiteten Clips im Ingest-Ordner")
             return 0

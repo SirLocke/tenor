@@ -18,6 +18,24 @@ def test_get_stat_retry_failure(tmp_path):
         get_stat(f, retries=2, delay=0.01)
 
 
+def test_event_skipped_when_file_disappears_before_stat(tmp_path):
+    """Regression: gelöschte Datei vor stat darf den Observer-Thread nicht crashen."""
+    from src.watcher import IngestProcessor
+
+    cfg = {"ingest_dir": str(tmp_path)}
+    p = IngestProcessor(cfg)
+
+    f = tmp_path / "video.mp4"
+    f.touch()
+
+    with patch("src.watcher.get_stat", side_effect=FileNotFoundError):
+        p.on_file_event(f)
+
+        # Event sollte skipped werden, Datei nicht im Pending
+        assert f not in p._pending
+        log.info("Test bestanden: Event wurde skippt, wenn File vor stat verschwindet")
+
+
 def test_is_media():
     assert is_media(Path("video.mp4"), [".mp4", ".mov"]) is False  # Not a file
 
