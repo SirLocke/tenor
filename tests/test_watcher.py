@@ -1,8 +1,11 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import logging
+
 import pytest
 from src.watcher import WatcherState, get_stat, is_media, size_stable, wait_until_stable
+from src.watcher import log
 
 
 def test_get_stat(tmp_path):
