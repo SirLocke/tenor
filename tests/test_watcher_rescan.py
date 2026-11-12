@@ -24,17 +24,9 @@ def test_rescan_interval_config():
 @patch("src.watcher.IngestProcessor.scan_existing")
 @patch("src.watcher.IngestProcessor.cleanup_partials")
 @patch("src.watcher.IngestProcessor.wait_for_renders")
-@patch("watchdog.observers.Observer.start")
-@patch("watchdog.observers.Observer.stop")
-@patch("watchdog.observers.Observer.join")
-@patch("watchdog.observers.Observer.schedule")
 @patch("time.monotonic")
 def test_watch_loop_rescan(
     mock_monotonic,
-    mock_schedule,
-    mock_join,
-    mock_stop,
-    mock_start,
     mock_wait_for_renders,
     mock_cleanup_partials,
     mock_scan_existing,
@@ -76,6 +68,7 @@ def test_watch_loop_rescan(
         return real_wait(0.01)
 
     with (
+        patch("src.watcher.Observer"),
         patch.object(threading.Event, "wait", side_effect=wait_side_effect),
         patch.object(threading.Event, "is_set", side_effect=real_event.is_set),
     ):
