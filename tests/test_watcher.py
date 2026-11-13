@@ -2,7 +2,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from src.watcher import WatcherState, get_stat, is_media, size_stable, wait_until_stable
+from src.watcher import WatcherState, get_stat, is_media, log, size_stable, wait_until_stable
 
 
 def test_get_stat(tmp_path):
@@ -16,6 +16,24 @@ def test_get_stat_retry_failure(tmp_path):
     f = tmp_path / "missing.txt"
     with pytest.raises(FileNotFoundError):
         get_stat(f, retries=2, delay=0.01)
+
+
+def test_event_skipped_when_file_disappears_before_stat(tmp_path):
+    """Regression: gelöschte Datei vor stat darf den Observer-Thread nicht crashen."""
+    from src.watcher import IngestProcessor
+
+    cfg = {"ingest_dir": str(tmp_path)}
+    p = IngestProcessor(cfg)
+
+    f = tmp_path / "video.mp4"
+    f.touch()
+
+    with patch("src.watcher.get_stat", side_effect=FileNotFoundError):
+        p.on_file_event(f)
+
+        # Event sollte skipped werden, Datei nicht im Pending
+        assert f not in p._pending
+        log.info("Test bestanden: Event wurde skippt, wenn File vor stat verschwindet")
 
 
 def test_is_media():
