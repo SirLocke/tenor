@@ -57,6 +57,7 @@ DEFAULTS: dict[str, Any] = {
         "width": 1080,
         "height": 1920,
         "fps": 30,
+        "fit_mode": "crop",
         "codec": "libx264",
         "crf": 19,
         "preset": "medium",
