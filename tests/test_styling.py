@@ -1,17 +1,26 @@
 from unittest.mock import MagicMock, patch
 
+import numpy as np
+import src.styling as styling_module
+from moviepy import VideoClip
 from PIL import Image, ImageDraw, ImageFont
 from src.styling import (
+    FIT_MODES,
     GradeConfig,
     _download_font,
     _fit_line,
     _line_height,
     _resolve_font_path_impl,
     _text_width,
+    blur_darken_frame,
     build_subtitle,
     build_text_overlay,
     center_crop_resize,
+    fit_clip_resize,
+    fit_dimensions,
     format_coordinates,
+    make_grader,
+    resolve_fit_mode,
     target_size,
     wrap_text,
 )
@@ -231,3 +240,96 @@ def test_build_text_overlay():
         }
         overlay_custom = build_text_overlay(cfg_custom, title="lower case title", subtitle="", geo_tag="")
         assert overlay_custom.size == (1080, 1920)
+
+
+def test_fit_dimensions():
+    assert fit_dimensions(1920, 1080, 1080, 1920) == (1080, 608)
+    assert fit_dimensions(1000, 1000, 1080, 1920) == (1080, 1080)
+    assert fit_dimensions(600, 1920, 1080, 1920) == (600, 1920)
+    assert fit_dimensions(10000, 10, 1080, 1920) == (1080, 2)
+    assert fit_dimensions(0, 1080, 1081, 1921) == (1080, 1920)
+
+
+def test_resolve_fit_mode(caplog):
+    assert FIT_MODES == ("crop", "blur", "pad")
+    assert resolve_fit_mode({}) == "crop"
+    assert resolve_fit_mode({"video": {"fit_mode": "  BLUR "}}) == "blur"
+    assert resolve_fit_mode({"video": {"fit_mode": "pad"}}) == "pad"
+    assert resolve_fit_mode({"video": {"fit_mode": "pad"}}, override="CROP") == "crop"
+
+    with caplog.at_level("WARNING", logger="tenor.styling"):
+        assert resolve_fit_mode({"video": {"fit_mode": "zoom"}}) == "crop"
+    assert "zoom" in caplog.text
+
+
+def test_blur_darken_frame_cv2_and_pillow_fallback(monkeypatch):
+    # Grayscale input (H, W)
+    gray = np.full((32, 48), 200, dtype=np.uint8)
+    out_cv2 = blur_darken_frame(gray, 108, 192, blur_radius=8.0, darken=0.5)
+    assert out_cv2.shape == (192, 108, 3)
+    assert out_cv2.dtype == np.uint8
+    assert np.all(out_cv2 == 100)
+
+    # RGBA float input with cv2=None Pillow fallback
+    rgba = np.full((32, 48, 4), 200.0, dtype=np.float32)
+    monkeypatch.setattr(styling_module, "cv2", None)
+    out_pil = blur_darken_frame(rgba, 108, 192, blur_radius=8.0, darken=0.45)
+    assert out_pil.shape == (192, 108, 3)
+    assert out_pil.dtype == np.uint8
+    assert np.all(out_pil == 110)
+
+    # Darken clipping upper bound (0.95 -> scale 0.05)
+    out_clipped = blur_darken_frame(gray, 16, 16, blur_radius=0.0, darken=2.0)
+    assert np.all(out_clipped == 10)
+
+
+def _make_landscape_clip(color=(200, 120, 60), size=(320, 180), duration=1.0):
+    w, h = size
+    frame = np.zeros((h, w, 3), dtype=np.uint8)
+    frame[:, :] = color
+    return VideoClip(lambda _t: frame, duration=duration)
+
+
+def test_fit_clip_resize_modes_and_cinematic_black_bars():
+    clip = _make_landscape_clip(color=(200, 120, 60), size=(320, 180), duration=1.2)
+
+    # 1. Crop mode
+    cropped = fit_clip_resize(clip, 108, 192, fit_mode="crop")
+    assert cropped.size == (108, 192)
+    assert cropped.duration == 1.2
+    cropped_frame = cropped.get_frame(0.0)
+    assert cropped_frame.shape == (192, 108, 3)
+    assert cropped_frame[0, 0].tolist() == [200, 120, 60]
+
+    # 2. Pad mode with cinematic black_lift: letterbox bars must remain pure #000000
+    cinematic_grade = GradeConfig.from_config({"style": {"preset": "cinematic"}})
+    assert cinematic_grade.black_lift > 0.0
+    grader = make_grader(cinematic_grade)
+    padded = fit_clip_resize(clip, 108, 192, fit_mode="pad", frame_transform=grader)
+    assert padded.size == (108, 192)
+    assert padded.duration == 1.2
+    padded_frame = padded.get_frame(0.0)
+    assert padded_frame.shape == (192, 108, 3)
+    # Top and bottom letterbox bars remain pure black
+    assert padded_frame[0, 0].tolist() == [0, 0, 0]
+    assert padded_frame[-1, -1].tolist() == [0, 0, 0]
+    # Center foreground is graded (non-black, shifted from original)
+    center_pixel = padded_frame[96, 54].tolist()
+    assert center_pixel != [0, 0, 0]
+    assert center_pixel != [200, 120, 60]
+
+    # 3. Blur mode: darkened blurred background around centered foreground
+    blurred = fit_clip_resize(clip, 108, 192, fit_mode="blur", blur_radius=6.0, blur_darken=0.5)
+    assert blurred.size == (108, 192)
+    assert blurred.duration == 1.2
+    blurred_frame = blurred.get_frame(0.0)
+    assert blurred_frame.shape == (192, 108, 3)
+    assert blurred_frame[0, 0].tolist() == [100, 60, 30]
+    assert blurred_frame[96, 54].tolist() == [200, 120, 60]
+
+    # 4. Portrait fast-path (9:16 source avoids CompositeVideoClip even in blur/pad)
+    portrait = _make_landscape_clip(color=(80, 90, 100), size=(108, 192), duration=0.8)
+    with patch("moviepy.CompositeVideoClip", side_effect=AssertionError("should not compose")):
+        fast = fit_clip_resize(portrait, 108, 192, fit_mode="blur")
+    assert fast.size == (108, 192)
+    assert fast.get_frame(0.0).shape == (192, 108, 3)

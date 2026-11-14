@@ -29,6 +29,7 @@ video:
   width: 1080          # 9:16
   height: 1920
   fps: 30
+  fit_mode: crop       # Rahmung nicht-9:16-Clips: crop (Zuschneiden), blur (unscharfer Hintergrund), pad (schwarze Balken)
   codec: libx264
   crf: 19              # 18 = visuell verlustfrei, 23 = klein. 19 = sweet spot
   preset: medium       # ultrafast..veryslow
