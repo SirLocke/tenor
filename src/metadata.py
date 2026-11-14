@@ -473,11 +473,15 @@ def probe_clip(path: str | Path, *, future_tolerance: float = 86400.0) -> ClipIn
         duration = 0.0
     clip.duration = max(duration, 0.0)
 
+    has_video = False
+    pix_fmt = ""
     streams = probe.get("streams")
     streams_iter = streams if isinstance(streams, Iterable) and not isinstance(streams, (str, bytes)) else []
     for stream in streams_iter:
         if not isinstance(stream, Mapping) or stream.get("codec_type") != "video":
             continue
+        has_video = True
+        pix_fmt = str(stream.get("pix_fmt") or "")
         if clip.width == 0:
             clip.width = int(_to_float(stream.get("width")) or 0)
             clip.height = int(_to_float(stream.get("height")) or 0)
@@ -549,7 +553,11 @@ def probe_clip(path: str | Path, *, future_tolerance: float = 86400.0) -> ClipIn
         lat, lon = _from_gps_tags(tags)
     clip.latitude, clip.longitude = lat, lon
     clip.has_geo = lat is not None and lon is not None
-    clip.extra = {"geo_raw": geo_raw} if geo_raw else {}
+    clip.extra["has_video"] = has_video
+    if pix_fmt:
+        clip.extra["pix_fmt"] = pix_fmt
+    if geo_raw:
+        clip.extra["geo_raw"] = geo_raw
     return clip
 
 
