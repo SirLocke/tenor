@@ -101,6 +101,14 @@ class RenderResult:
         return self.output is not None and self.output.is_file()
 
 
+def _record_error(errors: list[str], message: str, *args: Any) -> str:
+    """Formatiert eine Fehlermeldung, loggt sie und speichert sie in ``errors``."""
+    formatted = message % args if args else message
+    log.error("%s", formatted)
+    errors.append(formatted)
+    return formatted
+
+
 # --------------------------------------------------------------------------- #
 # Beat-Matching
 # --------------------------------------------------------------------------- #
@@ -1629,6 +1637,158 @@ def group_clips_by_day(clips: Sequence[ClipInfo], merge_days: bool = False) -> d
     return {label: list(clips)}
 
 
+def _apply_run_overrides(
+    cfg: dict[str, Any],
+    *,
+    output_dir: str | Path | None,
+    lossless: bool,
+    no_geocoding: bool,
+    duration: float | None,
+    audio: bool | None,
+    grade: str | None,
+    bpm: float | None,
+) -> None:
+    """Wendet Laufzeit-Overrides (CLI/Watcher) auf die geladene Config an."""
+    if output_dir is not None:
+        cfg["output_dir"] = str(output_dir)
+    if lossless:
+        video = cfg.setdefault("video", {})
+        if not isinstance(video, dict):
+            video = dict(video)
+            cfg["video"] = video
+        video["lossless"] = True
+    if no_geocoding:
+        geocoding = cfg.setdefault("geocoding", {})
+        cfg["geocoding"] = {**(geocoding if isinstance(geocoding, Mapping) else {}), "enabled": False}
+    if duration is not None:
+        video = cfg.setdefault("video", {})
+        if not isinstance(video, dict):
+            video = dict(video)
+            cfg["video"] = video
+        video["max_duration"] = float(duration)
+    _apply_audio_override(cfg, audio)
+    if grade is not None:
+        style = cfg.setdefault("style", {})
+        if not isinstance(style, dict):
+            style = dict(style)
+            cfg["style"] = style
+        style["preset"] = str(grade).lower()
+    if bpm is not None:
+        cut = cfg.setdefault("cut", {})
+        if not isinstance(cut, dict):
+            cut = dict(cut)
+            cfg["cut"] = cut
+        cut["fallback_bpm"] = float(bpm)
+
+
+def _apply_pace_settings(
+    cut_cfg: dict[str, Any],
+    video_cfg: Mapping[str, Any],
+    pace: str | None,
+) -> None:
+    """Passt Schnitt-Zielwerte anhand von ``pace`` oder ``video.max_duration`` an."""
+    effective_pace = pace
+    if not effective_pace:
+        max_dur = float(get(video_cfg, "max_duration", 0) or 0)
+        if 0 < max_dur <= 16:
+            effective_pace = "fast"
+        elif max_dur > 0:
+            effective_pace = "medium"
+
+    pace_presets: dict[str, tuple[float, float, float]] = {
+        "fast": (1.6, 1.3, 2.0),
+        "medium": (2.3, 1.7, 2.9),
+        "slow": (3.2, 2.4, 4.0),
+    }
+    if effective_pace in pace_presets:
+        target, target_min, target_max = pace_presets[effective_pace]
+        cut_cfg["target"] = target
+        cut_cfg["target_min"] = target_min
+        cut_cfg["target_max"] = target_max
+
+
+def _collect_and_validate_clips(
+    sources: Sequence[str | Path],
+    cfg: Mapping[str, Any],
+    geocoder: Geocoder,
+    *,
+    limit: int,
+    errors: list[str] | None = None,
+) -> list[ClipInfo]:
+    """Sammelt Clips, normalisiert 90/270-Rotationen und filtert ungültige Dateien aus."""
+    clips = collect_clips(
+        sources,
+        geocoder=geocoder,
+        recursive=bool(get(cfg, "watcher.recursive", False)),
+        ignore_dirs=list(get(cfg, "watcher.ignore_dirs", [])),
+        extensions=list(get(cfg, "extensions", [".mov", ".mp4"])),
+        future_tolerance=float(get(cfg, "metadata.future_tolerance", 86400.0)),
+    )
+    geocoder.save_cache()
+
+    for c in clips:
+        if c.rotation in (90, 270):
+            c.width, c.height = c.height, c.width
+            log.info(
+                "Clip %s rotiert um %d Grad: Display-Größe ist %dx%d", c.name, c.rotation, c.width, c.height
+            )
+            # Mark it so we don't swap it again (idempotent helper)
+            c.rotation = 0
+
+    if limit > 0:
+        clips = clips[:limit]
+    if not clips:
+        message = "Keine verwertbaren Eingabedateien gefunden: %s"
+        if errors is None:
+            log.error(message, ", ".join(str(s) for s in sources))
+        else:
+            _record_error(errors, message, ", ".join(str(s) for s in sources))
+        return []
+
+    min_source = float(get(cfg, "watcher.min_clip_duration", 0.0) or 0.0)
+    usable: list[ClipInfo] = []
+    for c in clips:
+        if c.duration < min_source:
+            continue
+        if c.error:
+            log.warning("Datei übersprungen (Metadaten-Fehler): %s - %s", c.path, c.error)
+            continue
+        if not is_valid_video(c.path):
+            log.warning("Datei übersprungen (korrupt oder nicht lesbar): %s", c.path)
+            continue
+        usable.append(c)
+
+    skipped = len(clips) - len(usable)
+    if skipped:
+        log.info("%d Datei(en) übersprungen (kürzer als %.1fs oder korrupt)", skipped, min_source)
+    if not usable:
+        message = "Alle Eingaben sind ungültig (kürzer als %.1fs oder korrupt)"
+        if errors is None:
+            log.error(message, min_source)
+        else:
+            _record_error(errors, message, min_source)
+        return []
+    return usable
+
+
+def _first_geo_tag(segments: Sequence[Segment]) -> str:
+    """Liefert formatierte Koordinaten des ersten Segments mit gültigen Geo-Daten."""
+    for segment in segments:
+        if segment.clip.has_geo and segment.clip.latitude is not None and segment.clip.longitude is not None:
+            return format_coordinates(segment.clip.latitude, segment.clip.longitude)
+    return ""
+
+
+def _delete_source_clips(clips: Sequence[ClipInfo]) -> None:
+    """Löscht verarbeitete Rohclips von der Platte (ohne Duplikate)."""
+    for clip_path in dict.fromkeys(c.path for c in clips):
+        try:
+            clip_path.unlink()
+            log.info("Rohclip gelöscht: %s", clip_path.name)
+        except OSError as exc:
+            log.warning("Rohclip nicht löschbar (%s): %s", clip_path.name, exc)
+
+
 def run(
     sources: Sequence[str | Path],
     *,
@@ -1659,101 +1819,31 @@ def run(
     cfg = load_config(config_path)
     # Overrides explizit durchreichen, damit der Watcher nicht darauf angewiesen
     # ist, dass die Datei auf der Platte schon die richtigen Werte enthält.
-    if output_dir is not None:
-        cfg["output_dir"] = str(output_dir)
-    if lossless:
-        cfg.setdefault("video", {})
-        cfg["video"]["lossless"] = True
-    if no_geocoding:
-        cfg.setdefault("geocoding", {})
-        cfg["geocoding"] = {**cfg["geocoding"], "enabled": False}
-    if duration is not None:
-        cfg.setdefault("video", {})
-        cfg["video"]["max_duration"] = float(duration)
-    _apply_audio_override(cfg, audio)
-    if grade is not None:
-        cfg.setdefault("style", {})
-        cfg["style"]["preset"] = str(grade).lower()
+    _apply_run_overrides(
+        cfg,
+        output_dir=output_dir,
+        lossless=lossless,
+        no_geocoding=no_geocoding,
+        duration=duration,
+        audio=audio,
+        grade=grade,
+        bpm=bpm,
+    )
     if fit_mode is not None:
         cfg.setdefault("video", {})
         cfg["video"]["fit_mode"] = str(fit_mode).strip().lower()
-    if bpm is not None:
-        cfg.setdefault("cut", {})
-        cfg["cut"]["fallback_bpm"] = float(bpm)
 
     video_cfg = get(cfg, "video", {}) or {}
     cut_cfg = dict(get(cfg, "cut", {}) or {})
-
-    # Schnitt-Tempo / Pacing anpassen
-    effective_pace = pace
-    if not effective_pace:
-        max_dur = float(get(video_cfg, "max_duration", 0) or 0)
-        if 0 < max_dur <= 16:
-            effective_pace = "fast"
-        elif max_dur > 0:
-            effective_pace = "medium"
-
-    if effective_pace == "fast":
-        cut_cfg["target"] = 1.6
-        cut_cfg["target_min"] = 1.3
-        cut_cfg["target_max"] = 2.0
-    elif effective_pace == "medium":
-        cut_cfg["target"] = 2.3
-        cut_cfg["target_min"] = 1.7
-        cut_cfg["target_max"] = 2.9
-    elif effective_pace == "slow":
-        cut_cfg["target"] = 3.2
-        cut_cfg["target_min"] = 2.4
-        cut_cfg["target_max"] = 4.0
+    _apply_pace_settings(cut_cfg, video_cfg, pace)
 
     result = RenderResult()
     if not sources:
         sources = [str(expand_path(get(cfg, "ingest_dir", ".")))]
 
     geocoder = Geocoder(cfg)
-
-    clips = collect_clips(
-        sources,
-        geocoder=geocoder,
-        recursive=bool(get(cfg, "watcher.recursive", False)),
-        ignore_dirs=list(get(cfg, "watcher.ignore_dirs", [])),
-        extensions=list(get(cfg, "extensions", [".mov", ".mp4"])),
-        future_tolerance=float(get(cfg, "metadata.future_tolerance", 86400.0)),
-    )
-    geocoder.save_cache()
-
-    for c in clips:
-        if c.rotation in (90, 270):
-            c.width, c.height = c.height, c.width
-            log.info(
-                "Clip %s rotiert um %d Grad: Display-Größe ist %dx%d", c.name, c.rotation, c.width, c.height
-            )
-            # Mark it so we don't swap it again (idempotent helper)
-            c.rotation = 0
-
-    if limit > 0:
-        clips = clips[:limit]
-    if not clips:
-        log.error("Keine verwertbaren Eingabedateien gefunden: %s", ", ".join(str(s) for s in sources))
-        return result
-
-    min_source = float(get(cfg, "watcher.min_clip_duration", 0.0) or 0.0)
-    usable: list[ClipInfo] = []
-    for c in clips:
-        if c.duration < min_source:
-            continue
-        if c.error:
-            log.warning("Datei übersprungen (Metadaten-Fehler): %s - %s", c.path, c.error)
-            continue
-        if not is_valid_video(c.path):
-            log.warning("Datei übersprungen (korrupt oder nicht lesbar): %s", c.path)
-            continue
-        usable.append(c)
-    skipped = len(clips) - len(usable)
-    if skipped:
-        log.info("%d Datei(en) übersprungen (kürzer als %.1fs oder korrupt)", skipped, min_source)
+    usable = _collect_and_validate_clips(sources, cfg, geocoder, limit=limit, errors=result.errors)
     if not usable:
-        log.error("Alle Eingaben sind ungültig (kürzer als %.1fs oder korrupt)", min_source)
         return result
 
     place = dominant_place(usable)
@@ -1785,32 +1875,64 @@ def run(
     if music_file is not None:
         log.info("Musik für den Export: %s", music_file)
     elif music and not str(music).startswith("spotify:"):
-        log.info("Musik %r liefert nur den Schnitttakt (kein Ton im Reel)", music)
+        if result.beat_source.startswith("beats:"):
+            log.info("Musik %r liefert nur den Schnitttakt (kein Ton im Reel)", music)
+        else:
+            log.warning(
+                "Musik %r nicht nutzbar - Export ohne Musikton (Beat-Quelle: %s)",
+                music,
+                result.beat_source,
+            )
 
     # Qualitätsanalyse einmalig über alle nutzbaren Clips. Das Ergebnis liegt
     # auf Platte (Key aus Pfad/mtime/Größe), wiederholte Läufe kosten also nur
     # noch einen Blick in die Datei.
     quality_cfg = QualityConfig.from_config(get(cfg, "quality", {}))
     analyses = analyse_clips(usable, quality_cfg, cache_dir=expand_path(quality_cfg.cache_dir))
+    min_source = float(get(cfg, "watcher.min_clip_duration", 0.0) or 0.0)
 
-    segments = build_segments(
-        usable,
-        cut_cfg,
-        video_cfg,
-        durations=durations,
-        min_source_duration=min_source,
-        quality_cfg=quality_cfg,
-        analyses=analyses,
-    )
-    result.segments = segments
-    result.duration = sum(s.duration for s in segments)
-    if not segments:
-        log.error("Kein einziger Cut zustande gekommen - Export abgebrochen")
+    # Clips nach Aufnahmetag gruppieren: jeder Tag wird ein eigenes Reel in
+    # <trip>/<tag>/. Mit --single-reel wird stattdessen bewusst alles in einem
+    # Reel gebündelt (Mehrfachauswahl mehrerer Tage im Homelab).
+    groups = group_clips_by_day(usable, merge_days=merge_days)
+    if len(groups) > 1:
+        log.info(
+            "Material verteilt sich auf %d Tage: %s",
+            len(groups),
+            ", ".join(f"{k} ({len(v)} Dateien)" for k, v in sorted(groups.items())),
+        )
+    elif merge_days:
+        log.info(
+            "Tage werden in einem Reel zusammengefasst: %s",
+            next(iter(groups), ""),
+        )
+
+    day_plans: list[tuple[str, list[ClipInfo], list[Segment]]] = []
+    for day, day_clips in sorted(groups.items()):
+        day_segments = build_segments(
+            day_clips,
+            cut_cfg,
+            video_cfg,
+            durations=durations,
+            min_source_duration=min_source,
+            quality_cfg=quality_cfg,
+            analyses=analyses,
+        )
+        if not day_segments:
+            log.warning("Kein Cut für den Tag %s - übersprungen", day)
+            continue
+        day_plans.append((day, day_clips, day_segments))
+
+    planned_segments = [seg for _, _, day_segments in day_plans for seg in day_segments]
+    result.segments = planned_segments
+    result.duration = sum(s.duration for s in planned_segments)
+    if not planned_segments:
+        _record_error(result.errors, "Kein einziger Cut zustande gekommen - Export abgebrochen")
         return result
 
     log.info(
         "Schnittplan: %d Cuts, %.1fs, Titel=%r, Unterzeile=%r, Beat-Quelle=%s",
-        len(segments),
+        len(planned_segments),
         result.duration,
         effective_title,
         subtitle,
@@ -1831,59 +1953,17 @@ def run(
     if not dry_run:
         base_out = ensure_dir(base_out)
 
-    # Clips nach Aufnahmetag gruppieren: jeder Tag wird ein eigenes Reel in
-    # <trip>/<tag>/. Mit --single-reel wird stattdessen bewusst alles in einem
-    # Reel gebündelt (Mehrfachauswahl mehrerer Tage im Homelab).
-    groups = group_clips_by_day(usable, merge_days=merge_days)
-    if len(groups) > 1:
-        log.info(
-            "Material verteilt sich auf %d Tage: %s",
-            len(groups),
-            ", ".join(f"{k} ({len(v)} Dateien)" for k, v in sorted(groups.items())),
-        )
-    elif merge_days:
-        log.info(
-            "Tage werden in einem Reel zusammengefasst: %s",
-            next(iter(groups), ""),
-        )
-
     grade_obj = GradeConfig.from_config(cfg, preset=grade)
     outputs: list[Path] = []
     covers: list[Path] = []
+    exported_segments: list[Segment] = []
     total_duration = 0.0
 
-    for day, day_clips in sorted(groups.items()):
-        # Bei einem einzigen Tag wurde der Schnittplan oben schon gebaut.
-        if len(groups) == 1:
-            day_segments = segments
-        else:
-            day_segments = build_segments(
-                day_clips,
-                cut_cfg,
-                video_cfg,
-                durations=durations,
-                min_source_duration=min_source,
-                quality_cfg=quality_cfg,
-                analyses=analyses,
-            )
-        if not day_segments:
-            log.warning("Kein Cut für den Tag %s - übersprungen", day)
-            continue
-
+    for day, day_clips, day_segments in day_plans:
         day_place = dominant_place(day_clips)
         day_title = title or trip or primary_place(day_place) or day
         day_subtitle = build_subtitle(day_place, day)
-
-        day_geo_tag = ""
-        # Find the first clip in the day that has geo
-        for segment in day_segments:
-            if (
-                segment.clip.has_geo
-                and segment.clip.latitude is not None
-                and segment.clip.longitude is not None
-            ):
-                day_geo_tag = format_coordinates(segment.clip.latitude, segment.clip.longitude)
-                break
+        day_geo_tag = _first_geo_tag(day_segments)
 
         target = export_reel(
             day_segments,
@@ -1902,22 +1982,25 @@ def run(
         )
         if target is None:
             continue
+        exported_segments.extend(day_segments)
+        total_duration += sum(s.duration for s in day_segments)
         if dry_run:
             # Im Dry-Run existiert nichts - nur den Plan protokollieren.
-            total_duration += sum(s.duration for s in day_segments)
             continue
         outputs.append(target)
         covers.append(target.with_suffix(".jpg"))
-        total_duration += sum(s.duration for s in day_segments)
 
     result.duration = total_duration
-    result.segments = segments
+    result.segments = exported_segments
 
     if dry_run:
         return result
 
     if not outputs:
-        log.error("Kein einziges Reel zustande gekommen")
+        if not result.errors:
+            _record_error(result.errors, "Kein einziges Reel zustande gekommen")
+        else:
+            log.error("Kein einziges Reel zustande gekommen")
         return result
 
     result.outputs = outputs
@@ -1926,12 +2009,7 @@ def run(
     result.cover = result.covers[0] if result.covers else None
 
     if delete_after:
-        for clip in dict.fromkeys(c.path for c in usable):
-            try:
-                clip.unlink()
-                log.info("Rohclip gelöscht: %s", clip.name)
-            except OSError as exc:
-                log.warning("Rohclip nicht löschbar (%s): %s", clip.name, exc)
+        _delete_source_clips(usable)
 
     return result
 
@@ -2036,6 +2114,202 @@ def _compute_fingerprint(
     return hashlib.sha256("||".join(payload).encode("utf-8")).hexdigest()[:32]
 
 
+def _find_existing_by_fingerprint(out_dir: Path, fingerprint: str) -> Path | None:
+    """Sucht ein bereits exportiertes, valides Video mit identischem Fingerprint."""
+    for fp_file in out_dir.glob("*.fingerprint"):
+        try:
+            if fp_file.read_text().strip() == fingerprint:
+                candidate = fp_file.with_suffix("")
+                if candidate.exists() and is_valid_video(candidate):
+                    log.info(
+                        "Überspringe Export: Valides Video %s existiert bereits für dieselbe Quelle und Beat-Konfiguration.",
+                        candidate.name,
+                    )
+                    return candidate
+        except OSError:
+            continue
+    return None
+
+
+def _cleanup_export_temps(partial: Path, temp_audio: Path, beat_caches: Sequence[Path] = ()) -> None:
+    """Entfernt temporäre Export-Artefakte (.part, .part_audio.mp4, .beat-cache)."""
+    partial.unlink(missing_ok=True)
+    temp_audio.unlink(missing_ok=True)
+    for bc in beat_caches:
+        bc.unlink(missing_ok=True)
+
+
+def _build_write_kwargs(
+    video_cfg: Mapping[str, Any],
+    *,
+    want_audio: bool,
+    has_audio_track: bool,
+    temp_audio: Path,
+    is_lossless: bool,
+) -> dict[str, Any]:
+    """Erstellt die Parameter für ``moviepy.VideoClip.write_videofile()``."""
+    ffmpeg_params = ["-pix_fmt", str(video_cfg.get("pixel_format", "yuv420p"))]
+    # Eine gemischte Musikspur ist Ton im fertigen Reel und braucht deshalb
+    # dieselben Codec-Parameter wie der Originalton - sonst schrieb moviepy
+    # stumm bzw. mit libmp3lame und Instagram hätte nichts abzuspielen.
+    with_track = bool(want_audio) or bool(has_audio_track)
+    crf = video_cfg.get("crf")
+    preset = str(video_cfg.get("preset", "medium"))
+
+    if is_lossless:
+        crf = 0
+        preset = "ultrafast"
+
+    if crf is not None:
+        ffmpeg_params.extend(["-crf", str(crf)])
+    if bool(video_cfg.get("faststart", True)):
+        ffmpeg_params.extend(["-movflags", "+faststart"])
+    threads = int(video_cfg.get("threads", 0) or 0)
+    if threads:
+        ffmpeg_params.extend(["-threads", str(threads)])
+
+    write_kwargs: dict[str, Any] = {
+        "fps": int(video_cfg.get("fps", 30)),
+        "codec": str(video_cfg.get("codec", "libx264")),
+        # `video.audio` entscheidet über den *Originalton*; eine gemischte
+        # Musikspur macht das Reel aber unabhängig davon hörbar.
+        "audio": bool(video_cfg.get("audio", False)) or with_track,
+        "preset": preset,
+        "threads": threads or None,
+        "ffmpeg_params": ffmpeg_params,
+        "logger": None,
+    }
+
+    if write_kwargs["audio"]:
+        # Nur wenn wirklich eine Spur mitkommt: sonst würde moviepy eine
+        # leere Audiodatei erzeugen und -copy in den Container muxen.
+        # Instagram/WhatsApp akzeptieren nur AAC, nicht das moviepy-Default
+        # libmp3lame.
+        write_kwargs["audio_codec"] = str(video_cfg.get("audio_codec", "aac"))
+        write_kwargs["audio_bitrate"] = str(video_cfg.get("audio_bitrate", "192k"))
+        write_kwargs["audio_fps"] = int(video_cfg.get("audio_sample_rate", 44100))
+        write_kwargs["audio_nbytes"] = int(video_cfg.get("audio_nbytes", 2))
+        write_kwargs["temp_audiofile"] = str(temp_audio)
+
+    return write_kwargs
+
+
+def _execute_export(
+    final: Any,
+    partial: Path,
+    temp_audio: Path,
+    beat_caches: Sequence[Path],
+    video_cfg: Mapping[str, Any],
+    *,
+    want_audio: bool,
+    dry_run: bool,
+    errors_seen: list[str] | None = None,
+) -> bool:
+    """Führt Dry-Run-Iteration oder Export (inkl. Lossless-Fallback) aus."""
+    has_audio_track = getattr(final, "audio", None) is not None
+
+    def _attempt(is_lossless: bool) -> None:
+        write_kwargs = _build_write_kwargs(
+            video_cfg,
+            want_audio=want_audio,
+            has_audio_track=has_audio_track,
+            temp_audio=temp_audio,
+            is_lossless=is_lossless,
+        )
+        if dry_run:
+            log.info("DRY-RUN: Rendere Video-Frames ohne Export")
+            for _ in final.iter_frames(fps=write_kwargs["fps"], dtype="uint8"):
+                pass
+            if write_kwargs["audio"] and getattr(final, "audio", None) is not None:
+                log.info("DRY-RUN: Rendere Audio-Frames ohne Export")
+                for _ in final.audio.iter_chunks(fps=write_kwargs["audio_fps"]):
+                    pass
+        else:
+            final.write_videofile(str(partial), **write_kwargs)
+
+    try:
+        _attempt(bool(video_cfg.get("lossless")))
+        return True
+    except Exception as exc:
+        _cleanup_export_temps(partial, temp_audio, beat_caches)
+        if bool(video_cfg.get("lossless")):
+            log.warning("Lossless-Export fehlgeschlagen, versuche Standard-Export: %s", exc)
+            try:
+                _attempt(False)
+                return True
+            except Exception as exc2:
+                log.exception("Export nach %s fehlgeschlagen: %s", partial, exc2)
+                _cleanup_export_temps(partial, temp_audio, beat_caches)
+                if errors_seen is not None:
+                    errors_seen.append(f"Export fehlgeschlagen: {exc2}")
+                return False
+        log.exception("Export nach %s fehlgeschlagen: %s", partial, exc)
+        if errors_seen is not None:
+            errors_seen.append(f"Export fehlgeschlagen: {exc}")
+        return False
+    except BaseException:
+        _cleanup_export_temps(partial, temp_audio, beat_caches)
+        raise
+
+
+def _finalize_export(
+    partial: Path,
+    target: Path,
+    out_dir: Path,
+    cfg: Mapping[str, Any],
+    video_cfg: Mapping[str, Any],
+    *,
+    fingerprint: str,
+    planned_duration: float,
+    want_audio: bool,
+    music_mixed: bool,
+    dry_run: bool,
+    no_cover: bool,
+) -> float:
+    """Schließt den Export atomar ab, schreibt Fingerprint/Cover und triggert Nextcloud."""
+    if dry_run:
+        log.info("Export fertig: %s (%.1fs Video)", target, planned_duration)
+        return planned_duration
+
+    partial.replace(target)
+    try:
+        target.with_suffix(f"{target.suffix}.fingerprint").write_text(fingerprint)
+    except OSError as exc:
+        log.warning("Konnte Fingerprint nicht schreiben: %s", exc)
+
+    # Tatsächliche Dauer aus der fertigen Datei, nicht aus dem Plan: es
+    # können Cuts ausgefallen sein.
+    actual = probe_duration(target) or planned_duration
+    log.info("Export fertig: %s (%.1fs Video)", target, actual)
+
+    if (want_audio or music_mixed) and not has_audio_stream(target):
+        if music_mixed:
+            # Genau der Fall, den der Nutzer gemeldet hat: Musik war gewählt,
+            # das Ergebnis war trotzdem stumm.
+            log.error(
+                "%s enthält trotz gemischter Musik keine Tonspur - der Ton wurde nicht geschrieben",
+                target.name,
+            )
+        else:
+            log.warning(
+                "%s enthält trotz video.audio=true keine Tonspur - vermutlich hatten die Quellen keinen Ton",
+                target.name,
+            )
+
+    if not no_cover and bool(video_cfg.get("cover", True)):
+        write_cover(
+            target,
+            target.with_suffix(".jpg"),
+            at=float(video_cfg.get("cover_at", 0.5)),
+            width=target_size(cfg)[0],
+            height=target_size(cfg)[1],
+        )
+
+    # Optional: Nextcloud-Scan nach Export (indiziert neue Dateien)
+    scan_nextcloud(cfg, out_dir)
+    return actual
+
+
 def export_reel(
     segments: Sequence[Segment],
     cfg: Mapping[str, Any],
@@ -2068,18 +2342,9 @@ def export_reel(
     fingerprint = _compute_fingerprint(segments, music, grade, title, subtitle, fit_mode=fit_mode)
 
     if not dry_run:
-        for fp_file in out_dir.glob("*.fingerprint"):
-            try:
-                if fp_file.read_text().strip() == fingerprint:
-                    candidate = fp_file.with_suffix("")
-                    if candidate.exists() and is_valid_video(candidate):
-                        log.info(
-                            "Überspringe Export: Valides Video %s existiert bereits für dieselbe Quelle und Beat-Konfiguration.",
-                            candidate.name,
-                        )
-                        return candidate
-            except OSError:
-                continue
+        existing = _find_existing_by_fingerprint(out_dir, fingerprint)
+        if existing is not None:
+            return existing
 
     if dry_run:
         for segment in segments:
@@ -2104,7 +2369,8 @@ def export_reel(
 
     has_space = check_disk_space(video_cfg, total_duration, out_dir, want_audio, music)
     if not dry_run and not has_space:
-        errors_seen.extend(["Zu wenig Speicherplatz für den Export"])
+        if errors_seen is not None:
+            errors_seen.extend(["Zu wenig Speicherplatz für den Export"])
         return None
 
     if not dry_run:
@@ -2135,163 +2401,71 @@ def export_reel(
 
     if not rendered:
         log.error("Kein Cut konnte gerendert werden - Abbruch ohne Export")
-        errors_seen.extend(errors)
+        if errors_seen is not None:
+            errors_seen.extend(errors)
         return None
 
-    errors_seen.extend(errors)
-    final = rendered[0]
+    if errors_seen is not None:
+        errors_seen.extend(errors)
+    rendered_clip = rendered[0]
+    final = rendered_clip
+    temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
     beat_caches = list(partial.parent.glob("*.beat-cache"))
+    music_mixed = False
     try:
-        music_mixed = False
         if music is not None:
-            mixed = mix_music(final, music, cfg, video_cfg)
+            mixed = mix_music(rendered_clip, music, cfg, video_cfg)
             if mixed is not None:
                 final = mixed
                 music_mixed = True
 
-        def _attempt_export(is_lossless: bool) -> None:
-            ffmpeg_params = ["-pix_fmt", str(video_cfg.get("pixel_format", "yuv420p"))]
-            # Eine gemischte Musikspur ist Ton im fertigen Reel und braucht deshalb
-            # dieselben Codec-Parameter wie der Originalton - sonst schrieb moviepy
-            # stumm bzw. mit libmp3lame und Instagram hätte nichts abzuspielen.
-            with_track = bool(want_audio) or bool(getattr(final, "audio", None) is not None)
-            crf = video_cfg.get("crf")
-            preset = str(video_cfg.get("preset", "medium"))
-
-            if is_lossless:
-                crf = 0
-                preset = "ultrafast"
-
-            if crf is not None:
-                ffmpeg_params.extend(["-crf", str(crf)])
-            if bool(video_cfg.get("faststart", True)):
-                ffmpeg_params.extend(["-movflags", "+faststart"])
-            threads = int(video_cfg.get("threads", 0) or 0)
-            if threads:
-                ffmpeg_params.extend(["-threads", str(threads)])
-
-            write_kwargs: dict[str, Any] = {
-                "fps": int(video_cfg.get("fps", 30)),
-                "codec": str(video_cfg.get("codec", "libx264")),
-                # `video.audio` entscheidet über den *Originalton*; eine gemischte
-                # Musikspur macht das Reel aber unabhängig davon hörbar.
-                "audio": bool(video_cfg.get("audio", False)) or with_track,
-                "preset": preset,
-                "threads": threads or None,
-                "ffmpeg_params": ffmpeg_params,
-                "logger": None,
-            }
-            temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
-
-            if write_kwargs["audio"]:
-                # Nur wenn wirklich eine Spur mitkommt: sonst würde moviepy eine
-                # leere Audiodatei erzeugen und -copy in den Container muxen.
-                # Instagram/WhatsApp akzeptieren nur AAC, nicht das moviepy-Default
-                # libmp3lame.
-                write_kwargs["audio_codec"] = str(video_cfg.get("audio_codec", "aac"))
-                write_kwargs["audio_bitrate"] = str(video_cfg.get("audio_bitrate", "192k"))
-                write_kwargs["audio_fps"] = int(video_cfg.get("audio_sample_rate", 44100))
-                write_kwargs["audio_nbytes"] = int(video_cfg.get("audio_nbytes", 2))
-                write_kwargs["temp_audiofile"] = str(temp_audio)
-
-            if dry_run:
-                log.info("DRY-RUN: Rendere Video-Frames ohne Export")
-                for _ in final.iter_frames(fps=write_kwargs["fps"], dtype="uint8"):
-                    pass
-                if write_kwargs["audio"] and getattr(final, "audio", None) is not None:
-                    log.info("DRY-RUN: Rendere Audio-Frames ohne Export")
-                    for _ in final.audio.iter_chunks(fps=write_kwargs["audio_fps"]):
-                        pass
-            else:
-                try:
-                    final.write_videofile(str(partial), **write_kwargs)
-
-                except BaseException:
-                    raise
-
-        try:
-            _attempt_export(bool(video_cfg.get("lossless")))
-        except Exception as exc:
-            partial.unlink(missing_ok=True)
-            temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
-            temp_audio.unlink(missing_ok=True)
-            for bc in beat_caches:
-                bc.unlink(missing_ok=True)
-            if bool(video_cfg.get("lossless")):
-                log.warning("Lossless-Export fehlgeschlagen, versuche Standard-Export: %s", exc)
-                try:
-                    _attempt_export(False)
-                except Exception as exc2:
-                    log.exception("Export nach %s fehlgeschlagen: %s", partial, exc2)
-                    partial.unlink(missing_ok=True)
-                    temp_audio.unlink(missing_ok=True)
-                    for bc in beat_caches:
-                        bc.unlink(missing_ok=True)
-                    if errors_seen is not None:
-                        errors_seen.append(f"Export fehlgeschlagen: {exc2}")
-                    return None
-            else:
-                log.exception("Export nach %s fehlgeschlagen: %s", partial, exc)
-                if errors_seen is not None:
-                    errors_seen.append(f"Export fehlgeschlagen: {exc}")
-                return None
+        if not _execute_export(
+            final,
+            partial,
+            temp_audio,
+            beat_caches,
+            video_cfg,
+            want_audio=want_audio,
+            dry_run=dry_run,
+            errors_seen=errors_seen,
+        ):
+            return None
     except BaseException:
         # SIGTERM/Stromausfall: unfertige Datei nicht liegen lassen
-        partial.unlink(missing_ok=True)
-        temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
-        temp_audio.unlink(missing_ok=True)
-        for bc in beat_caches:
-            bc.unlink(missing_ok=True)
+        _cleanup_export_temps(partial, temp_audio, beat_caches)
         raise
     finally:
-        _close_all([final])
-        _close_all(getattr(final, "tenor_sources", []) or [])
+        clips_to_close = [final] if final is rendered_clip else [final, rendered_clip]
+        _close_all(clips_to_close)
+
+        sources_to_close: list[Any] = []
+        seen_ids: set[int] = set()
+        for clip_obj in clips_to_close:
+            raw_sources = getattr(clip_obj, "tenor_sources", None)
+            if isinstance(raw_sources, (list, tuple)):
+                for src in raw_sources:
+                    if src is not None and id(src) not in seen_ids:
+                        seen_ids.add(id(src))
+                        sources_to_close.append(src)
+        _close_all(sources_to_close)
         _close_all([getattr(final, "tenor_music_reader", None)])
 
         _cleanup_ffmpeg_children()
-        temp_audio = partial.with_name(f"{partial.stem}.part_audio.mp4")
         temp_audio.unlink(missing_ok=True)
 
-    if not dry_run:
-        partial.replace(target)
-        try:
-            target.with_suffix(f"{target.suffix}.fingerprint").write_text(fingerprint)
-        except OSError as exc:
-            log.warning("Konnte Fingerprint nicht schreiben: %s", exc)
-        # Tatsächliche Dauer aus der fertigen Datei, nicht aus dem Plan: es
-        # können Cuts ausgefallen sein.
-        actual = probe_duration(target) or sum(s.duration for s in segments)
-    else:
-        actual = sum(s.duration for s in segments)
-
-    log.info("Export fertig: %s (%.1fs Video)", target, actual)
-
-    if not dry_run and (want_audio or music_mixed) and not has_audio_stream(target):
-        if music_mixed:
-            # Genau der Fall, den der Nutzer gemeldet hat: Musik war gewählt,
-            # das Ergebnis war trotzdem stumm.
-            log.error(
-                "%s enthält trotz gemischter Musik keine Tonspur - der Ton wurde nicht geschrieben",
-                target.name,
-            )
-        else:
-            log.warning(
-                "%s enthält trotz video.audio=true keine Tonspur - vermutlich hatten die Quellen keinen Ton",
-                target.name,
-            )
-
-    if not dry_run and not no_cover and bool(video_cfg.get("cover", True)):
-        write_cover(
-            target,
-            target.with_suffix(".jpg"),
-            at=float(video_cfg.get("cover_at", 0.5)),
-            width=target_size(cfg)[0],
-            height=target_size(cfg)[1],
-        )
-
-    # Optional: Nextcloud-Scan nach Export (indiziert neue Dateien)
-    if not dry_run:
-        scan_nextcloud(cfg, out_dir)
+    _finalize_export(
+        partial,
+        target,
+        out_dir,
+        cfg,
+        video_cfg,
+        fingerprint=fingerprint,
+        planned_duration=total_duration,
+        want_audio=want_audio,
+        music_mixed=music_mixed,
+        dry_run=dry_run,
+        no_cover=no_cover,
+    )
 
     return target
 
@@ -2418,19 +2592,95 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _validate_cli_numbers(
+    *,
+    bpm: float | None,
+    duration: float | None,
+    limit: int | None,
+) -> list[str]:
+    """Prüft numerische CLI-Parameter auf gültige Wertebereiche."""
+    errors: list[str] = []
+    if bpm is not None and (not math.isfinite(bpm) or bpm <= 0.0):
+        errors.append(f"Ungültiger Wert für --bpm: {bpm!r} (muss eine endliche Zahl > 0 sein)")
+    if duration is not None and (not math.isfinite(duration) or duration < 0.0):
+        errors.append(f"Ungültiger Wert für --duration: {duration!r} (muss eine endliche Zahl >= 0 sein)")
+    if limit is not None and limit < 0:
+        errors.append(f"Ungültiger Wert für --limit: {limit!r} (muss >= 0 sein)")
+    return errors
+
+
+def _json_payload(result: Any) -> dict[str, Any]:
+    """Serialisiert ein Pipeline-Ergebnis (oder Test-Double) in das JSON-Format."""
+    output = getattr(result, "output", None)
+    outputs = getattr(result, "outputs", None) or []
+    cover = getattr(result, "cover", None)
+    covers = getattr(result, "covers", None) or []
+    segments = getattr(result, "segments", None) or []
+    duration = float(getattr(result, "duration", 0.0) or 0.0)
+    title = getattr(result, "title", "") or ""
+    subtitle = getattr(result, "subtitle", "") or ""
+    place = getattr(result, "place", None)
+    trip = getattr(result, "trip", None)
+    beat_source = getattr(result, "beat_source", "fallback")
+    if beat_source is None:
+        beat_source = "fallback"
+    beat_note = getattr(result, "beat_note", "") or ""
+    errors = list(getattr(result, "errors", None) or [])
+    return {
+        "output": str(output) if output else None,
+        "outputs": [str(p) for p in outputs],
+        "cover": str(cover) if cover else None,
+        "covers": [str(p) for p in covers],
+        "cuts": len(segments),
+        "duration": round(duration, 2),
+        "title": title,
+        "subtitle": subtitle,
+        "place": place,
+        "trip": trip,
+        "output_dir": str(Path(output).parent) if output else None,
+        "beat_source": beat_source,
+        "beat_note": beat_note,
+        "errors": errors,
+    }
+
+
+def _print_json(result: Any) -> None:
+    """Gibt das JSON-Ergebnis formatiert auf stdout aus."""
+    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))  # noqa: T201
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    validation_errors = _validate_cli_numbers(
+        bpm=args.bpm,
+        duration=args.duration,
+        limit=args.limit,
+    )
+    if validation_errors:
+        for err in validation_errors:
+            print(err, file=sys.stderr)  # noqa: T201
+        if args.json:
+            _print_json(RenderResult(errors=validation_errors))
+        return 2
+
     try:
         cfg = load_config(args.config)
     except ConfigError as exc:
-        print(f"Konfigurationsfehler: {exc}", file=sys.stderr)  # noqa: T201
+        msg = f"Konfigurationsfehler: {exc}"
+        print(msg, file=sys.stderr)  # noqa: T201
+        if args.json:
+            _print_json(RenderResult(errors=[msg]))
         return 2
     setup_logging(cfg, quiet=args.quiet)
 
     if not args.input:
         ingest = expand_path(get(cfg, "ingest_dir", "."))
         if not ingest.is_dir():
-            log.error("Kein -i angegeben und ingest_dir %s existiert nicht", ingest)
+            msg = f"Kein -i angegeben und ingest_dir {ingest} existiert nicht"
+            log.error("%s", msg)
+            if args.json:
+                _print_json(RenderResult(errors=[msg]))
             return 2
         args.input = [str(ingest)]
 
@@ -2456,30 +2706,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     if args.json:
-        print(  # noqa: T201
-            json.dumps(
-                {
-                    "output": str(result.output) if result.output else None,
-                    "outputs": [str(p) for p in result.outputs],
-                    "cover": str(result.cover) if result.cover else None,
-                    "covers": [str(p) for p in result.covers],
-                    "cuts": len(result.segments),
-                    "duration": round(result.duration, 2),
-                    "title": result.title,
-                    "subtitle": result.subtitle,
-                    "place": result.place,
-                    "trip": result.trip,
-                    "output_dir": str(result.output.parent) if result.output else None,
-                    "beat_source": result.beat_source,
-                    "beat_note": result.beat_note,
-                    "errors": result.errors,
-                },
-                indent=2,
-                ensure_ascii=False,
-            )
-        )
+        _print_json(result)
 
-    if not result.output and not args.dry_run:
+    if args.dry_run:
+        segments = getattr(result, "segments", None) or []
+        if not segments:
+            return 1
+        if not args.json:
+            log.info(
+                "Dry-Run Zusammenfassung: %d Cuts, %.1fs, Beat-Quelle=%s, Titel=%r",
+                len(segments),
+                float(getattr(result, "duration", 0.0) or 0.0),
+                getattr(result, "beat_source", "fallback"),
+                getattr(result, "title", ""),
+            )
+        return 0
+
+    if not getattr(result, "output", None):
         return 1
     return 0
 
