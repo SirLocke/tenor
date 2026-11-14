@@ -475,9 +475,10 @@ def is_valid_video(path: Path) -> bool:
                 timeout=FFPROBE_TIMEOUT,
                 check=True,
             )
-            return "video" in result.stdout.decode().strip()
-        finally:
+        except BaseException:
             _cleanup_ffmpeg_children()
+            raise
+        return "video" in result.stdout.decode().strip()
     except subprocess.TimeoutExpired:
         return False
     except (subprocess.SubprocessError, OSError, ValueError):
@@ -513,9 +514,10 @@ def has_audio_stream(path: Path) -> bool:
                 timeout=FFPROBE_TIMEOUT,
                 check=True,
             )
-            return result.stdout.decode().strip() == "audio"
-        finally:
+        except BaseException:
             _cleanup_ffmpeg_children()
+            raise
+        return result.stdout.decode().strip() == "audio"
     except subprocess.TimeoutExpired:
         return False
     except (subprocess.SubprocessError, OSError, ValueError):
@@ -549,17 +551,105 @@ def probe_duration(path: Path) -> float | None:
                 timeout=FFPROBE_TIMEOUT,
                 check=True,
             )
-            value = float(result.stdout.decode().strip())
-            return value if math.isfinite(value) and value > 0 else None
-        finally:
+        except BaseException:
             _cleanup_ffmpeg_children()
+            raise
+        value = float(result.stdout.decode().strip())
+        return value if math.isfinite(value) and value > 0 else None
     except subprocess.TimeoutExpired:
         return None
     except (subprocess.SubprocessError, OSError, ValueError):
         return None
 
 
-def _open_source(path: Path, *, with_audio: bool = False) -> Any:
+def _is_10bit_pix_fmt(pix_fmt: str | None) -> bool:
+    """Erkennt gängige 10-Bit-HEVC-Pixelformate, die 8-Bit-Transkodierung brauchen."""
+    return bool(pix_fmt and ("yuv420p10le" in pix_fmt or "p010le" in pix_fmt))
+
+
+def _probe_pix_fmt(path: Path) -> str:
+    """Liest das Pixelformat des ersten Videostreams via ffprobe."""
+    from .metadata import FFPROBE, FFPROBE_TIMEOUT, RAW_VIDEO_SUFFIXES
+
+    probe_cmd = [
+        FFPROBE,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=pix_fmt",
+        "-of",
+        "csv=p=0",
+    ]
+    if path.suffix.lower() in RAW_VIDEO_SUFFIXES:
+        probe_cmd.extend(["-f", "hevc"])
+    probe_cmd.extend(["--", str(path)])
+    try:
+        try:
+            result = subprocess.run(probe_cmd, capture_output=True, timeout=FFPROBE_TIMEOUT, check=True)
+        except BaseException:
+            _cleanup_ffmpeg_children()
+            raise
+        return result.stdout.decode().strip()
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(f"ffprobe timeout für {path}") from exc
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return ""
+
+
+def _transcode_to_8bit(path: Path, *, with_audio: bool) -> Path:
+    """Transkodiert einen 10-Bit-HEVC-Clip temporär nach 8-Bit H.264."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+
+    transcode_cmd = [
+        "ffmpeg",
+        "-v",
+        "error",
+        "-y",
+        "-i",
+        str(path),
+        "-pix_fmt",
+        "yuv420p",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-crf",
+        "22",
+    ]
+    if with_audio:
+        # Ton nur mitnehmen, wenn er danach wirklich gebraucht wird.
+        transcode_cmd += ["-c:a", "aac", "-b:a", "192k"]
+    else:
+        transcode_cmd += ["-an"]
+    transcode_cmd.append(str(tmp_path))
+
+    try:
+        subprocess.run(transcode_cmd, timeout=120, check=True)
+    except BaseException:
+        _cleanup_ffmpeg_children()
+        tmp_path.unlink(missing_ok=True)
+        raise
+    return tmp_path
+
+
+def _unlink_files(paths: Sequence[Path]) -> None:
+    """Löscht temporäre Dateien fehlertolerant."""
+    for path in paths:
+        path.unlink(missing_ok=True)
+
+
+def _open_source(
+    path: Path,
+    *,
+    with_audio: bool = False,
+    prepared_path: Path | None = None,
+    pix_fmt: str | None = None,
+) -> Any:
     """Öffnet eine Videoquelle; beschädigte Dateien werfen eine lesbare Exception.
 
     10-Bit-HEVC (yuv420p10le) wird via ffmpeg nach 8-Bit (yuv420p)
@@ -569,12 +659,7 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
     aus, weil die Reels stumm exportiert werden - der Ton eines Rohclips wird
     nur mit ``video.audio: true`` mitgenommen.
     """
-    import subprocess
-    import tempfile
-
     from moviepy import VideoFileClip
-
-    from .metadata import FFPROBE, FFPROBE_TIMEOUT
 
     def _validated(clip: Any) -> Any:
         """Größenprüfung - der Reader ist ab hier schon offen (ffmpeg läuft)."""
@@ -583,58 +668,40 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
             raise ValueError(f"ungültige Bildgröße {size}")
         return clip
 
-    # Prüfen ob 10-Bit-HEVC -> dann nach 8-Bit transkodieren
-    probe_cmd = [
-        FFPROBE,
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=pix_fmt,codec_name",
-        "-of",
-        "csv=p=0",
-        "--",
-        str(path),
-    ]
-    tmp_path: Path | None = None
-    try:
+    if prepared_path is not None:
+        clip = VideoFileClip(str(prepared_path), audio=with_audio)
         try:
-            result = subprocess.run(probe_cmd, capture_output=True, timeout=FFPROBE_TIMEOUT, check=True)
-            out = result.stdout.decode().strip()
-        finally:
-            _cleanup_ffmpeg_children()
-        if "yuv420p10le" in out or "p010le" in out:
-            # 10-Bit -> temporär nach 8-Bit transkodieren
-            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-                tmp_path = Path(tmp.name)
-            transcode_cmd = [
-                "ffmpeg",
-                "-v",
-                "error",
-                "-y",
-                "-i",
-                str(path),
-                "-pix_fmt",
-                "yuv420p",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "ultrafast",
-                "-crf",
-                "22",
-            ]
-            if with_audio:
-                # Ton nur mitnehmen, wenn er danach wirklich gebraucht wird.
-                transcode_cmd += ["-c:a", "aac", "-b:a", "192k"]
-            else:
-                transcode_cmd += ["-an"]
-            transcode_cmd.append(str(tmp_path))
+            return _validated(clip)
+        except BaseException:
+            with contextlib.suppress(Exception):  # pragma: no cover
+                clip.close()
+            raise
+
+    resolved_pix_fmt = pix_fmt if pix_fmt is not None else _probe_pix_fmt(path)
+    if _is_10bit_pix_fmt(resolved_pix_fmt):
+        tmp_path: Path | None = None
+        try:
+            tmp_path = _transcode_to_8bit(path, with_audio=with_audio)
+            clip = VideoFileClip(str(tmp_path), audio=with_audio)
             try:
-                subprocess.run(transcode_cmd, timeout=120, check=True)
-            finally:
-                _cleanup_ffmpeg_children()
-            clip = _validated(VideoFileClip(str(tmp_path), audio=with_audio))
+                _validated(clip)
+            except BaseException:
+                with contextlib.suppress(Exception):  # pragma: no cover
+                    clip.close()
+                raise
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError) as exc:
+            # WICHTIG: bei jedem Fehlschlag das Zwischenfile löschen. moviepy
+            # räumt nichts auf (Clip.__del__ ist absichtlich ein no-op), sonst
+            # wächst /tmp bei jeder kaputten Datei um ein Vielfaches.
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
+            if isinstance(exc, subprocess.TimeoutExpired):
+                raise ValueError(f"ffprobe timeout für {path}") from exc
+        except BaseException:
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
+            raise
+        else:
             original_close = clip.close
             scratch = tmp_path
 
@@ -646,20 +713,6 @@ def _open_source(path: Path, *, with_audio: bool = False) -> Any:
 
             clip.close = close_and_cleanup
             return clip
-    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError) as exc:
-        # WICHTIG: bei jedem Fehlschlag das Zwischenfile löschen. moviepy
-        # räumt nichts auf (Clip.__del__ ist absichtlich ein no-op), sonst
-        # wächst /tmp bei jeder kaputten Datei um ein Vielfaches.
-        if tmp_path is not None:
-            tmp_path.unlink(missing_ok=True)
-            tmp_path = None
-        if isinstance(exc, subprocess.TimeoutExpired):
-            raise ValueError(f"ffprobe timeout für {path}") from exc
-    except BaseException:
-        if tmp_path is not None:
-            tmp_path.unlink(missing_ok=True)
-            tmp_path = None
-        raise
 
     clip = VideoFileClip(str(path), audio=with_audio)
     try:
@@ -682,6 +735,8 @@ def build_segment_clip(
     height: int,
     sources: list[Any] | None = None,
     with_audio: bool = False,
+    prepared_path: Path | None = None,
+    pix_fmt: str | None = None,
 ) -> Any:
     width &= ~1
     height &= ~1
@@ -700,7 +755,12 @@ def build_segment_clip(
     """
     from moviepy import CompositeVideoClip, ImageClip
 
-    source = _open_source(segment.clip.path, with_audio=with_audio)
+    source = _open_source(
+        segment.clip.path,
+        with_audio=with_audio,
+        prepared_path=prepared_path,
+        pix_fmt=pix_fmt,
+    )
     if sources is not None:
         sources.append(source)
 
@@ -787,6 +847,40 @@ def render_segments(
     sources: list[Any] = []
     sources_lock = threading.Lock()
     failures_lock = threading.Lock()
+    cache_meta_lock = threading.Lock()
+    key_locks: dict[tuple[Path, bool], threading.Lock] = {}
+    prepared_cache: dict[tuple[Path, bool], tuple[Path | None, str]] = {}
+    failed_keys: dict[tuple[Path, bool], Exception] = {}
+    temp_files: list[Path] = []
+    temp_files_lock = threading.Lock()
+
+    def _prepare_source(segment: Segment) -> tuple[Path | None, str]:
+        src_path = segment.clip.path
+        key = (src_path.resolve(), with_audio)
+        with cache_meta_lock:
+            lock = key_locks.setdefault(key, threading.Lock())
+        with lock:
+            if key in failed_keys:
+                raise failed_keys[key]
+            if key in prepared_cache:
+                return prepared_cache[key]
+
+            extra = getattr(segment.clip, "extra", None)
+            raw_pix_fmt = extra.get("pix_fmt") if isinstance(extra, Mapping) else None
+            try:
+                resolved_pix_fmt = str(raw_pix_fmt) if raw_pix_fmt else _probe_pix_fmt(src_path)
+                prepared_path: Path | None = None
+                if _is_10bit_pix_fmt(resolved_pix_fmt):
+                    prepared_path = _transcode_to_8bit(src_path, with_audio=with_audio)
+                    with temp_files_lock:
+                        temp_files.append(prepared_path)
+            except Exception as exc:
+                failed_keys[key] = exc
+                raise
+
+            entry = (prepared_path, resolved_pix_fmt)
+            prepared_cache[key] = entry
+            return entry
 
     rendered_array: list[Any | None] = [None] * len(segments)
 
@@ -800,6 +894,7 @@ def render_segments(
             if text_on_first_cuts > 0 and index > text_on_first_cuts:
                 segment_overlay = None
 
+            prepared_path, pix_fmt = _prepare_source(segment)
             clip = build_segment_clip(
                 segment,
                 cfg,
@@ -810,6 +905,8 @@ def render_segments(
                 height=height,
                 sources=local_sources,
                 with_audio=with_audio,
+                prepared_path=prepared_path,
+                pix_fmt=pix_fmt,
             )
 
             with sources_lock:
@@ -851,6 +948,7 @@ def render_segments(
 
         if not rendered:
             _close_all(sources)
+            _unlink_files(temp_files)
             return []
 
         # concatenate_videoclips kann bei gemischten Größen/fehlerhaften
@@ -869,10 +967,27 @@ def render_segments(
             )
         # Quell-Reader leben bis nach write_videofile weiter
         final.tenor_sources = sources  # type: ignore[attr-defined]
+        final.tenor_temp_files = temp_files  # type: ignore[attr-defined]
+        if temp_files:
+            original_close = final.close
+
+            def close_and_cleanup(
+                _close: Any = original_close,
+                _sources: list[Any] = sources,
+                _temps: list[Path] = temp_files,
+            ) -> None:
+                try:
+                    _close()
+                finally:
+                    _close_all(_sources)
+                    _unlink_files(_temps)
+
+            final.close = close_and_cleanup  # type: ignore[method-assign]
         return [final]
     except BaseException:
         _close_all(sources)
         _close_all([c for c in rendered_array if c is not None])
+        _unlink_files(temp_files)
         raise
 
 
@@ -1096,8 +1211,9 @@ def write_cover(
     try:
         try:
             proc = subprocess.run(cmd, capture_output=True, timeout=120, check=False)
-        finally:
+        except BaseException:
             _cleanup_ffmpeg_children()
+            raise
     except FileNotFoundError:
         log.error("ffmpeg nicht gefunden - kein Cover erzeugt")
         return None
@@ -1753,7 +1869,7 @@ def _collect_and_validate_clips(
         if c.error:
             log.warning("Datei übersprungen (Metadaten-Fehler): %s - %s", c.path, c.error)
             continue
-        if not is_valid_video(c.path):
+        if not (getattr(c, "extra", None) or {}).get("has_video") and not is_valid_video(c.path):
             log.warning("Datei übersprungen (korrupt oder nicht lesbar): %s", c.path)
             continue
         usable.append(c)
@@ -2448,6 +2564,13 @@ def export_reel(
                         seen_ids.add(id(src))
                         sources_to_close.append(src)
         _close_all(sources_to_close)
+
+        temp_files: list[Path] = []
+        for clip_obj in clips_to_close:
+            raw_temp_files = getattr(clip_obj, "tenor_temp_files", None)
+            if isinstance(raw_temp_files, (list, tuple)):
+                temp_files.extend(raw_temp_files)
+        _unlink_files(temp_files)
         _close_all([getattr(final, "tenor_music_reader", None)])
 
         _cleanup_ffmpeg_children()
@@ -2497,8 +2620,9 @@ def scan_nextcloud(cfg: Mapping[str, Any], output_dir: Path) -> None:
                 check=False,
                 capture_output=True,
             )
-        finally:
+        except BaseException:
             _cleanup_ffmpeg_children()
+            raise
     except subprocess.TimeoutExpired:
         log.warning("Nextcloud-Scan Timeout nach %ss", timeout)
     except Exception as exc:  # pragma: no cover

@@ -11,6 +11,7 @@ from src.metadata import (
     collect_clips,
     embedded_datetime,
     ffprobe_json,
+    probe_clip,
 )
 
 
@@ -207,3 +208,52 @@ def test_collect_clips_invalid_extension(tmp_path):
     file1.touch()
     clips = collect_clips([str(file1)], extensions=(".mp4",))
     assert len(clips) == 0
+
+
+@patch("src.metadata.ffprobe_json")
+def test_probe_clip_records_has_video_and_pix_fmt(mock_ffprobe, tmp_path):
+    video = tmp_path / "clip.mov"
+    video.touch()
+    mock_ffprobe.return_value = {
+        "streams": [
+            {"codec_type": "audio", "codec_name": "aac"},
+            {
+                "codec_type": "video",
+                "width": 1920,
+                "height": 1080,
+                "pix_fmt": "yuv420p10le",
+                "avg_frame_rate": "30/1",
+            },
+        ],
+        "format": {
+            "duration": "4.5",
+            "tags": {"com.apple.quicktime.location.ISO6709": "+53.4702-006.1153/"},
+        },
+    }
+
+    clip = probe_clip(video)
+    assert clip.error is None
+    assert clip.extra["has_video"] is True
+    assert clip.extra["pix_fmt"] == "yuv420p10le"
+    assert clip.extra["geo_raw"] == "+53.4702-006.1153/"
+
+
+@patch("src.metadata.ffprobe_json")
+def test_probe_clip_omits_empty_pix_fmt_and_tracks_missing_video(mock_ffprobe, tmp_path):
+    video = tmp_path / "no_pixfmt.mp4"
+    video.touch()
+    mock_ffprobe.return_value = {
+        "streams": [{"codec_type": "video", "width": 1920, "height": 1080}],
+        "format": {"duration": "2.0"},
+    }
+    clip = probe_clip(video)
+    assert clip.extra == {"has_video": True}
+
+    audio_only = tmp_path / "audio.mp4"
+    audio_only.touch()
+    mock_ffprobe.return_value = {
+        "streams": [{"codec_type": "audio", "codec_name": "aac"}],
+        "format": {"duration": "2.0"},
+    }
+    clip_audio = probe_clip(audio_only)
+    assert clip_audio.extra == {"has_video": False}
