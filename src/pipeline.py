@@ -54,8 +54,10 @@ from .styling import (
     build_subtitle,
     build_text_overlay,
     center_crop_resize,
+    fit_clip_resize,
     format_coordinates,
     make_grader,
+    resolve_fit_mode,
     target_size,
 )
 
@@ -726,10 +728,14 @@ def build_segment_clip(
     # Audio-Teil des Clips nicht mitnehmen.
     source_audio = getattr(source, "audio", None) if with_audio else None
 
-    piece = center_crop_resize(piece, width, height)
+    fit_mode = resolve_fit_mode(cfg)
     grader = make_grader(grade)
-    if grader is not None:
-        piece = piece.image_transform(grader)
+    if fit_mode == "crop":
+        piece = center_crop_resize(piece, width, height)
+        if grader is not None:
+            piece = piece.image_transform(grader)
+    else:
+        piece = fit_clip_resize(piece, width, height, fit_mode=fit_mode, frame_transform=grader)
 
     if overlay_png is not None:
         text = ImageClip(overlay_png, duration=piece.duration)
@@ -1797,6 +1803,7 @@ def run(
     delete_after: bool = False,
     duration: float | None = None,
     grade: str | None = None,
+    fit_mode: str | None = None,
     pace: str | None = None,
     lossless: bool = False,
     audio: bool | None = None,
@@ -1822,6 +1829,9 @@ def run(
         grade=grade,
         bpm=bpm,
     )
+    if fit_mode is not None:
+        cfg.setdefault("video", {})
+        cfg["video"]["fit_mode"] = str(fit_mode).strip().lower()
 
     video_cfg = get(cfg, "video", {}) or {}
     cut_cfg = dict(get(cfg, "cut", {}) or {})
@@ -2081,6 +2091,7 @@ def _compute_fingerprint(
     grade: GradeConfig,
     title: str,
     subtitle: str,
+    fit_mode: str = "crop",
 ) -> str:
     """Berechnet einen eindeutigen Hash für diesen Export-Job (Quellen und Beat-Konfiguration)."""
     payload = []
@@ -2096,6 +2107,9 @@ def _compute_fingerprint(
     payload.append(str(getattr(grade, "preset", "")))
     payload.append(title)
     payload.append(subtitle)
+    normalized_fit = str(fit_mode or "crop").strip().lower()
+    if normalized_fit != "crop":
+        payload.append(normalized_fit)
 
     return hashlib.sha256("||".join(payload).encode("utf-8")).hexdigest()[:32]
 
@@ -2324,7 +2338,8 @@ def export_reel(
         out_dir = ensure_dir(out_dir)
     log.info("Ausgabeordner: %s", out_dir)
 
-    fingerprint = _compute_fingerprint(segments, music, grade, title, subtitle)
+    fit_mode = resolve_fit_mode(cfg)
+    fingerprint = _compute_fingerprint(segments, music, grade, title, subtitle, fit_mode=fit_mode)
 
     if not dry_run:
         existing = _find_existing_by_fingerprint(out_dir, fingerprint)
@@ -2530,6 +2545,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Farbfilter-Grading (natural = dezent/natürlich, original = kein Filter, cinematic = Dark-Film)",
     )
     parser.add_argument(
+        "--fit",
+        choices=["crop", "blur", "pad"],
+        default=None,
+        help="Rahmung nicht-9:16-Clips (crop = Zuschneiden, blur = unscharfer Hintergrund, pad = schwarze Balken)",
+    )
+    parser.add_argument(
         "--pace",
         choices=["fast", "medium", "slow"],
         default=None,
@@ -2676,6 +2697,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         delete_after=args.delete_after,
         duration=args.duration,
         grade=args.grade,
+        fit_mode=args.fit,
         pace=args.pace,
         lossless=args.lossless,
         audio=args.audio,

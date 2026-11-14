@@ -268,10 +268,80 @@ def make_grader(grade: GradeConfig) -> Any:
 
 
 # --------------------------------------------------------------------------- #
-# Crop / Skalierung
+# Crop / Skalierung / Framing
 # --------------------------------------------------------------------------- #
+FIT_MODES: tuple[str, ...] = ("crop", "blur", "pad")
+
+
+def resolve_fit_mode(cfg: Mapping[str, Any], override: str | None = None) -> str:
+    """Ermittelt den Framing-Modus aus Override oder ``video.fit_mode``."""
+    raw = override if override is not None else get(cfg, "video.fit_mode", "crop")
+    if raw is None:
+        return "crop"
+    mode = str(raw).strip().lower()
+    if not mode:
+        return "crop"
+    if mode not in FIT_MODES:
+        log.warning("Unbekannter video.fit_mode %r - verwende 'crop'", raw)
+        return "crop"
+    return mode
+
+
 def target_size(cfg: Mapping[str, Any]) -> tuple[int, int]:
     return (int(get(cfg, "video.width", 1080)), int(get(cfg, "video.height", 1920)))
+
+
+def fit_dimensions(src_w: int, src_h: int, target_w: int, target_h: int) -> tuple[int, int]:
+    """Berechnet seitenverhältniswahrende Zielmaße innerhalb ``(target_w, target_h)`` (gerade, >= 2)."""
+    max_w = max(2, int(target_w) & ~1)
+    max_h = max(2, int(target_h) & ~1)
+    if src_w <= 0 or src_h <= 0 or target_w <= 0 or target_h <= 0:
+        return (max_w, max_h)
+    scale = min(max_w / src_w, max_h / src_h)
+    fit_w = max(2, int(round(src_w * scale)) & ~1)
+    fit_h = max(2, int(round(src_h * scale)) & ~1)
+    return (min(fit_w, max_w), min(fit_h, max_h))
+
+
+def blur_darken_frame(
+    frame: np.ndarray,
+    width: int,
+    height: int,
+    *,
+    blur_radius: float = 24.0,
+    darken: float = 0.45,
+) -> np.ndarray:
+    """Erzeugt einen weichgezeichneten, abgedunkelten RGB-Hintergrundframe ``(height, width, 3)``."""
+    array = np.asarray(frame)
+    if array.ndim == 2:
+        array = np.repeat(array[:, :, None], 3, axis=2)
+    elif array.ndim == 3 and array.shape[2] == 1:
+        array = np.repeat(array, 3, axis=2)
+    if array.dtype != np.uint8:
+        array = np.clip(array, 0, 255).astype(np.uint8)
+    if array.shape[2] >= 4:
+        array = array[:, :, :3]
+
+    radius = max(float(blur_radius), 0.0)
+    if cv2 is not None:
+        blurred = cv2.GaussianBlur(array, (0, 0), sigmaX=radius, sigmaY=radius) if radius > 0.0 else array
+        resized = (
+            cv2.resize(blurred, (width, height), interpolation=cv2.INTER_LINEAR)
+            if (blurred.shape[1], blurred.shape[0]) != (width, height)
+            else blurred
+        )
+    else:
+        img = Image.fromarray(array)
+        if radius > 0.0:
+            img = img.filter(ImageFilter.GaussianBlur(radius=radius))
+        if img.size != (width, height):
+            img = img.resize((width, height), Image.Resampling.BILINEAR)
+        resized = np.asarray(img, dtype=np.uint8)
+
+    scale = 1.0 - float(np.clip(darken, 0.0, 0.95))
+    if scale < 1.0 - 1e-6:
+        return np.clip(np.round(resized.astype(np.float32) * scale), 0, 255).astype(np.uint8)
+    return np.ascontiguousarray(resized, dtype=np.uint8)
 
 
 def center_crop_resize(clip: Any, width: int, height: int) -> Any:
@@ -303,6 +373,58 @@ def center_crop_resize(clip: Any, width: int, height: int) -> Any:
         cropped = clip.cropped(x1=0, y1=y1, x2=w, y2=y2)
 
     return cropped.resized((width, height))
+
+
+def fit_clip_resize(
+    clip: Any,
+    width: int,
+    height: int,
+    *,
+    fit_mode: str = "crop",
+    blur_radius: float = 24.0,
+    blur_darken: float = 0.45,
+    frame_transform: Any = None,
+) -> Any:
+    """Skaliert einen Clip auf ``(width, height)`` im gewählten Framing-Modus (``crop``, ``blur``, ``pad``)."""
+    target_w = max(2, int(width) & ~1)
+    target_h = max(2, int(height) & ~1)
+    mode = str(fit_mode).strip().lower()
+    if mode not in FIT_MODES:
+        log.warning("Unbekannter video.fit_mode %r - verwende 'crop'", fit_mode)
+        mode = "crop"
+
+    w, h = clip.size
+    if mode == "crop" or w <= 0 or h <= 0 or abs((w / h) - (target_w / target_h)) < 1e-4:
+        result = center_crop_resize(clip, target_w, target_h)
+        if frame_transform is not None:
+            result = result.image_transform(frame_transform)
+        return result
+
+    from moviepy import CompositeVideoClip
+
+    fit_w, fit_h = fit_dimensions(w, h, target_w, target_h)
+    fg = clip.resized((fit_w, fit_h))
+
+    if mode == "pad":
+        if frame_transform is not None:
+            fg = fg.image_transform(frame_transform)
+        return CompositeVideoClip([fg.with_position("center")], size=(target_w, target_h), bg_color=(0, 0, 0))
+
+    bg_w = max(16, (target_w // 4) & ~1)
+    bg_h = max(16, (target_h // 4) & ~1)
+    bg = center_crop_resize(clip, bg_w, bg_h).image_transform(
+        lambda frame: blur_darken_frame(
+            frame,
+            target_w,
+            target_h,
+            blur_radius=blur_radius,
+            darken=blur_darken,
+        )
+    )
+    composed = CompositeVideoClip([bg, fg.with_position("center")], size=(target_w, target_h))
+    if frame_transform is not None:
+        composed = composed.image_transform(frame_transform)
+    return composed
 
 
 # --------------------------------------------------------------------------- #

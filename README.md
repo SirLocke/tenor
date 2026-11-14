@@ -198,6 +198,7 @@ Der Export und der Ton stecken in `video:`:
 
 | Key | Default | Wirkung |
 | --- | --- | --- |
+| `fit_mode` | `crop` | Rahmung nicht-9:16-Clips (`TENOR_VIDEO_FIT_MODE` / `--fit`): `crop` (mittig zuschneiden), `blur` (ganzes Bild über weichgezeichnetem, abgedunkeltem Hintergrund), `pad` (ganzes Bild mit schwarzen Balken) |
 | `audio` | `false` | `true` nimmt den **Originalton der Rohclips** mit (mit Musik gedämpft auf `original_gain`) |
 | `original_gain` | `0.25` | Tonpegel des Originaltons, wenn Musik darunter liegt |
 | `audio_codec` | `aac` | AAC – das einzige Tonformat, das Instagram/WhatsApp verlässlich annehmen |
@@ -303,8 +304,8 @@ der ausgeschaltete Wert `255` bzw. `1.0`.
 
 Wichtige Flags der Pipeline: `--no-cover`, `--no-geo` (ohne Netzwerk),
 `--limit N`, `--json`, `--delete-after` (Rohclits nach Export löschen),
-`--audio` / `--no-audio` (Ton an/aus), `--dry-run`, `--pace fast|medium|slow`
-und `--bpm N`. Mit `--single-reel` (Alias `--merge-days`) werden Clips aus
+`--audio` / `--no-audio` (Ton an/aus), `--dry-run`, `--fit crop|blur|pad`,
+`--pace fast|medium|slow` und `--bpm N`. Mit `--single-reel` (Alias `--merge-days`) werden Clips aus
 mehreren Aufnahmetagen bewusst in *einem* Reel gebündelt statt pro Tag getrennt
 (der Homelab-Selector nutzt das bei Mehrfachauswahl). `--json` meldet mit
 `beat_source` die tatsächlich verwendete Beat-Quelle und mit `beat_note` eine
