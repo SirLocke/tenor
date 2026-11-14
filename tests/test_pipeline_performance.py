@@ -100,6 +100,8 @@ def test_run_skips_is_valid_video_when_has_video_recorded(tmp_path: Path) -> Non
     with (
         patch("src.pipeline.collect_clips", return_value=[info]),
         patch("src.pipeline.is_valid_video") as mock_valid,
+        patch("src.pipeline.analyse_clips", return_value={}),
+        patch("src.pipeline.export_reel"),
     ):
         res = run([str(clip_path)], limit=1, dry_run=True)
 
@@ -120,6 +122,8 @@ def test_run_calls_is_valid_video_when_has_video_missing(tmp_path: Path) -> None
     with (
         patch("src.pipeline.collect_clips", return_value=[info]),
         patch("src.pipeline.is_valid_video", return_value=True) as mock_valid,
+        patch("src.pipeline.analyse_clips", return_value={}),
+        patch("src.pipeline.export_reel"),
     ):
         res = run([str(clip_path)], limit=1, dry_run=True)
 
@@ -312,6 +316,53 @@ def test_export_reel_unlinks_temp_files_after_write_and_source_close(tmp_path: P
     assert "write:exists=True" in events
     assert not transcoded_tmp.exists()
     assert events.count(f"close:{transcoded_tmp}") >= 2
+
+
+def test_export_reel_unlinks_temp_files_after_write_failure(tmp_path: Path) -> None:
+    src_path = tmp_path / "hevc10.mov"
+    src_path.write_bytes(b"raw")
+    clip = ClipInfo(path=src_path, duration=10.0, extra={"has_video": True, "pix_fmt": "yuv420p10le"})
+    segments = [Segment(clip=clip, start=0.0, end=1.5)]
+    transcoded_tmp = tmp_path / "shared_export_failure.mp4"
+    events: list[str] = []
+
+    def fake_transcode(_path: Path, *, with_audio: bool) -> Path:
+        transcoded_tmp.write_bytes(b"8bit")
+        return transcoded_tmp
+
+    fake_final = _FakeFinalClip(temp_check=transcoded_tmp, events=events)
+    fake_final.write_videofile = MagicMock(side_effect=RuntimeError("ffmpeg crashed"))
+    cfg = {"naming": {"folder_template": ""}, "video": {"audio": False, "cover": False}}
+    errors: list[str] = []
+
+    with (
+        patch("src.pipeline._transcode_to_8bit", side_effect=fake_transcode),
+        patch("moviepy.VideoFileClip", side_effect=lambda p, **_kw: _FakeVideoClip(p, close_log=events)),
+        patch("moviepy.concatenate_videoclips", return_value=fake_final),
+        patch("src.pipeline.center_crop_resize", side_effect=lambda piece, _w, _h: piece),
+        patch("src.pipeline.make_grader", return_value=None),
+        patch("src.pipeline.make_overlay_array", return_value=None),
+        patch("src.pipeline.check_disk_space", return_value=True),
+        patch("src.pipeline._cleanup_ffmpeg_children"),
+    ):
+        target = export_reel(
+            segments,
+            cfg,
+            tmp_path / "output",
+            title="Test",
+            subtitle="Sub",
+            day="2026-09-11",
+            grade=GradeConfig(),
+            when=1600000000.0,
+            no_cover=True,
+            errors_seen=errors,
+        )
+
+    assert target is None
+    fake_final.write_videofile.assert_called_once()
+    assert any("ffmpeg crashed" in error for error in errors)
+    assert not transcoded_tmp.exists()
+    assert events.index("close_final") < events.index(f"close:{transcoded_tmp}")
 
 
 def test_transcode_to_8bit_unlinks_partial_temp_on_failure(tmp_path: Path) -> None:
