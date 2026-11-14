@@ -99,6 +99,14 @@ class RenderResult:
         return self.output is not None and self.output.is_file()
 
 
+def _record_error(errors: list[str], message: str, *args: Any) -> str:
+    """Formatiert eine Fehlermeldung, loggt sie und speichert sie in ``errors``."""
+    formatted = message % args if args else message
+    log.error("%s", formatted)
+    errors.append(formatted)
+    return formatted
+
+
 # --------------------------------------------------------------------------- #
 # Beat-Matching
 # --------------------------------------------------------------------------- #
@@ -1724,7 +1732,11 @@ def run(
     if limit > 0:
         clips = clips[:limit]
     if not clips:
-        log.error("Keine verwertbaren Eingabedateien gefunden: %s", ", ".join(str(s) for s in sources))
+        _record_error(
+            result.errors,
+            "Keine verwertbaren Eingabedateien gefunden: %s",
+            ", ".join(str(s) for s in sources),
+        )
         return result
 
     min_source = float(get(cfg, "watcher.min_clip_duration", 0.0) or 0.0)
@@ -1743,7 +1755,11 @@ def run(
     if skipped:
         log.info("%d Datei(en) übersprungen (kürzer als %.1fs oder korrupt)", skipped, min_source)
     if not usable:
-        log.error("Alle Eingaben sind ungültig (kürzer als %.1fs oder korrupt)", min_source)
+        _record_error(
+            result.errors,
+            "Alle Eingaben sind ungültig (kürzer als %.1fs oder korrupt)",
+            min_source,
+        )
         return result
 
     place = dominant_place(usable)
@@ -1775,7 +1791,14 @@ def run(
     if music_file is not None:
         log.info("Musik für den Export: %s", music_file)
     elif music and not str(music).startswith("spotify:"):
-        log.info("Musik %r liefert nur den Schnitttakt (kein Ton im Reel)", music)
+        if result.beat_source.startswith("beats:"):
+            log.info("Musik %r liefert nur den Schnitttakt (kein Ton im Reel)", music)
+        else:
+            log.warning(
+                "Musik %r nicht nutzbar - Export ohne Musikton (Beat-Quelle: %s)",
+                music,
+                result.beat_source,
+            )
 
     # Qualitätsanalyse einmalig über alle nutzbaren Clips. Das Ergebnis liegt
     # auf Platte (Key aus Pfad/mtime/Größe), wiederholte Läufe kosten also nur
@@ -1795,7 +1818,7 @@ def run(
     result.segments = segments
     result.duration = sum(s.duration for s in segments)
     if not segments:
-        log.error("Kein einziger Cut zustande gekommen - Export abgebrochen")
+        _record_error(result.errors, "Kein einziger Cut zustande gekommen - Export abgebrochen")
         return result
 
     log.info(
@@ -1907,7 +1930,10 @@ def run(
         return result
 
     if not outputs:
-        log.error("Kein einziges Reel zustande gekommen")
+        if not result.errors:
+            _record_error(result.errors, "Kein einziges Reel zustande gekommen")
+        else:
+            log.error("Kein einziges Reel zustande gekommen")
         return result
 
     result.outputs = outputs
@@ -2089,7 +2115,8 @@ def export_reel(
 
     has_space = check_disk_space(video_cfg, total_duration, out_dir, want_audio, music)
     if not dry_run and not has_space:
-        errors_seen.extend(["Zu wenig Speicherplatz für den Export"])
+        if errors_seen is not None:
+            errors_seen.extend(["Zu wenig Speicherplatz für den Export"])
         return None
 
     if not dry_run:
@@ -2120,10 +2147,12 @@ def export_reel(
 
     if not rendered:
         log.error("Kein Cut konnte gerendert werden - Abbruch ohne Export")
-        errors_seen.extend(errors)
+        if errors_seen is not None:
+            errors_seen.extend(errors)
         return None
 
-    errors_seen.extend(errors)
+    if errors_seen is not None:
+        errors_seen.extend(errors)
     final = rendered[0]
     beat_caches = list(partial.parent.glob("*.beat-cache"))
     try:
@@ -2397,19 +2426,95 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _validate_cli_numbers(
+    *,
+    bpm: float | None,
+    duration: float | None,
+    limit: int | None,
+) -> list[str]:
+    """Prüft numerische CLI-Parameter auf gültige Wertebereiche."""
+    errors: list[str] = []
+    if bpm is not None and (not math.isfinite(bpm) or bpm <= 0.0):
+        errors.append(f"Ungültiger Wert für --bpm: {bpm!r} (muss eine endliche Zahl > 0 sein)")
+    if duration is not None and (not math.isfinite(duration) or duration < 0.0):
+        errors.append(f"Ungültiger Wert für --duration: {duration!r} (muss eine endliche Zahl >= 0 sein)")
+    if limit is not None and limit < 0:
+        errors.append(f"Ungültiger Wert für --limit: {limit!r} (muss >= 0 sein)")
+    return errors
+
+
+def _json_payload(result: Any) -> dict[str, Any]:
+    """Serialisiert ein Pipeline-Ergebnis (oder Test-Double) in das JSON-Format."""
+    output = getattr(result, "output", None)
+    outputs = getattr(result, "outputs", None) or []
+    cover = getattr(result, "cover", None)
+    covers = getattr(result, "covers", None) or []
+    segments = getattr(result, "segments", None) or []
+    duration = float(getattr(result, "duration", 0.0) or 0.0)
+    title = getattr(result, "title", "") or ""
+    subtitle = getattr(result, "subtitle", "") or ""
+    place = getattr(result, "place", None)
+    trip = getattr(result, "trip", None)
+    beat_source = getattr(result, "beat_source", "fallback")
+    if beat_source is None:
+        beat_source = "fallback"
+    beat_note = getattr(result, "beat_note", "") or ""
+    errors = list(getattr(result, "errors", None) or [])
+    return {
+        "output": str(output) if output else None,
+        "outputs": [str(p) for p in outputs],
+        "cover": str(cover) if cover else None,
+        "covers": [str(p) for p in covers],
+        "cuts": len(segments),
+        "duration": round(duration, 2),
+        "title": title,
+        "subtitle": subtitle,
+        "place": place,
+        "trip": trip,
+        "output_dir": str(Path(output).parent) if output else None,
+        "beat_source": beat_source,
+        "beat_note": beat_note,
+        "errors": errors,
+    }
+
+
+def _print_json(result: Any) -> None:
+    """Gibt das JSON-Ergebnis formatiert auf stdout aus."""
+    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))  # noqa: T201
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    validation_errors = _validate_cli_numbers(
+        bpm=args.bpm,
+        duration=args.duration,
+        limit=args.limit,
+    )
+    if validation_errors:
+        for err in validation_errors:
+            print(err, file=sys.stderr)  # noqa: T201
+        if args.json:
+            _print_json(RenderResult(errors=validation_errors))
+        return 2
+
     try:
         cfg = load_config(args.config)
     except ConfigError as exc:
-        print(f"Konfigurationsfehler: {exc}", file=sys.stderr)  # noqa: T201
+        msg = f"Konfigurationsfehler: {exc}"
+        print(msg, file=sys.stderr)  # noqa: T201
+        if args.json:
+            _print_json(RenderResult(errors=[msg]))
         return 2
     setup_logging(cfg, quiet=args.quiet)
 
     if not args.input:
         ingest = expand_path(get(cfg, "ingest_dir", "."))
         if not ingest.is_dir():
-            log.error("Kein -i angegeben und ingest_dir %s existiert nicht", ingest)
+            msg = f"Kein -i angegeben und ingest_dir {ingest} existiert nicht"
+            log.error("%s", msg)
+            if args.json:
+                _print_json(RenderResult(errors=[msg]))
             return 2
         args.input = [str(ingest)]
 
@@ -2434,30 +2539,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     if args.json:
-        print(  # noqa: T201
-            json.dumps(
-                {
-                    "output": str(result.output) if result.output else None,
-                    "outputs": [str(p) for p in result.outputs],
-                    "cover": str(result.cover) if result.cover else None,
-                    "covers": [str(p) for p in result.covers],
-                    "cuts": len(result.segments),
-                    "duration": round(result.duration, 2),
-                    "title": result.title,
-                    "subtitle": result.subtitle,
-                    "place": result.place,
-                    "trip": result.trip,
-                    "output_dir": str(result.output.parent) if result.output else None,
-                    "beat_source": result.beat_source,
-                    "beat_note": result.beat_note,
-                    "errors": result.errors,
-                },
-                indent=2,
-                ensure_ascii=False,
-            )
-        )
+        _print_json(result)
 
-    if not result.output and not args.dry_run:
+    if args.dry_run:
+        segments = getattr(result, "segments", None) or []
+        if not segments:
+            return 1
+        if not args.json:
+            log.info(
+                "Dry-Run Zusammenfassung: %d Cuts, %.1fs, Beat-Quelle=%s, Titel=%r",
+                len(segments),
+                float(getattr(result, "duration", 0.0) or 0.0),
+                getattr(result, "beat_source", "fallback"),
+                getattr(result, "title", ""),
+            )
+        return 0
+
+    if not getattr(result, "output", None):
         return 1
     return 0
 
