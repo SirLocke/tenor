@@ -2107,7 +2107,8 @@ def run(
         covers.append(target.with_suffix(".jpg"))
 
     result.duration = total_duration
-    result.segments = exported_segments
+    if exported_segments:
+        result.segments = exported_segments
 
     if dry_run:
         return result
@@ -2770,7 +2771,7 @@ def _json_payload(result: Any) -> dict[str, Any]:
 
 def _print_json(result: Any) -> None:
     """Gibt das JSON-Ergebnis formatiert auf stdout aus."""
-    log.info(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
