@@ -2771,7 +2771,7 @@ def _json_payload(result: Any) -> dict[str, Any]:
 
 def _print_json(result: Any) -> None:
     """Gibt das JSON-Ergebnis formatiert auf stdout aus."""
-    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))
+    print(json.dumps(_json_payload(result), indent=2, ensure_ascii=False))  # noqa: T201
 
 
 def main(argv: Sequence[str] | None = None) -> int:
