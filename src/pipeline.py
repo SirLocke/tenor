@@ -2107,7 +2107,8 @@ def run(
         covers.append(target.with_suffix(".jpg"))
 
     result.duration = total_duration
-    result.segments = exported_segments
+    if exported_segments:
+        result.segments = exported_segments
 
     if dry_run:
         return result
