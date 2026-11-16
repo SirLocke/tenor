@@ -449,7 +449,8 @@ def build_segments(
 # --------------------------------------------------------------------------- #
 # Rendering
 def is_valid_video(path: Path) -> bool:
-    """Prüft mit ffprobe, ob eine Videodatei lesbar und nicht korrupt ist."""
+    """Prüft mit ffprobe, ob eine Videodatei lesbar und nicht korrupt ist.
+    Ablehnung von NaN/Unendlichen Duration-Werten."""
     from .metadata import FFPROBE, FFPROBE_TIMEOUT, RAW_VIDEO_SUFFIXES
 
     try:
@@ -460,7 +461,7 @@ def is_valid_video(path: Path) -> bool:
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=codec_type",
+            "stream=codec_type:format=duration",
             "-of",
             "csv=p=0",
         ]
@@ -478,7 +479,21 @@ def is_valid_video(path: Path) -> bool:
         except BaseException:
             _cleanup_ffmpeg_children()
             raise
-        return "video" in result.stdout.decode().strip()
+        output = result.stdout.decode().strip()
+        if not output:
+            return False
+        lines = output.splitlines()
+        # Erste Zeile: Codec-Typ, zweite Zeile: Dauer in Sekunden
+        if len(lines) < 2 or lines[0] != "video":
+            return False
+        duration_str = lines[1]
+        try:
+            duration = float(duration_str)
+        except ValueError:
+            return False
+        if not math.isfinite(duration) or duration <= 0:
+            return False
+        return True
     except subprocess.TimeoutExpired:
         return False
     except (subprocess.SubprocessError, OSError, ValueError):
