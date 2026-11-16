@@ -14,7 +14,7 @@ opencv-python-headless==5.0.0.93   # LUT-Anwendung (headless: kein X11 nötig)
 pillow==11.3.0              # Typografie-Overlay, Cover
 
 # --- Beat-Matching ---
-librosa==1.0.0              # librosa.beat.beat_track
+librosa==1.0.1              # librosa.beat.beat_track
 
 # --- Metadaten, Geocoding, Konfiguration ---
 geopy==2.5.0                # Reverse-Geocoding via Nominatim
