@@ -384,6 +384,9 @@ def test_cleanup_ffmpeg_children_skipped_on_clean_subprocess_run(tmp_path: Path)
         if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp4"):
             Path(cmd[-1]).write_bytes(b"mp4")
         if "-show_entries" in cmd and "stream=codec_type" in cmd and "v:0" in cmd:
+            # is_valid_video now requests codec_type AND format=duration in one call
+            if "format=duration" in cmd:
+                return MagicMock(stdout=b"video\n3.5\n", stderr=b"", returncode=0)
             return MagicMock(stdout=b"video\n", stderr=b"", returncode=0)
         if "-show_entries" in cmd and "stream=codec_type" in cmd and "a:0" in cmd:
             return MagicMock(stdout=b"audio\n", stderr=b"", returncode=0)
