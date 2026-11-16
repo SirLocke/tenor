@@ -383,8 +383,18 @@ def test_cleanup_ffmpeg_children_skipped_on_clean_subprocess_run(tmp_path: Path)
             cover.write_bytes(b"jpg")
         if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp4"):
             Path(cmd[-1]).write_bytes(b"mp4")
-        if "-show_entries" in cmd and "stream=codec_type" in cmd and "v:0" in cmd:
-            return MagicMock(stdout=b"video\n", stderr=b"", returncode=0)
+        # is_valid_video: -select_streams v:0 -show_entries stream=codec_type:format=duration
+        if "v:0" in cmd and "stream=codec_type:format=duration" in cmd:
+            return MagicMock(stdout=b"video\n3.5\n", stderr=b"", returncode=0)
+        # has_audio_stream: -select_streams a:0 -show_entries stream=codec_type
+        if "a:0" in cmd and "stream=codec_type" in cmd:
+            return MagicMock(stdout=b"audio\n", stderr=b"", returncode=0)
+        # probe_duration: -show_entries format=duration (no stream=codec_type)
+        if "format=duration" in cmd and "stream=codec_type" not in cmd:
+            return MagicMock(stdout=b"3.5\n", stderr=b"", returncode=0)
+        # _probe_pix_fmt: -show_entries stream=pix_fmt
+        if "stream=pix_fmt" in cmd:
+            return MagicMock(stdout=b"yuv420p\n", stderr=b"", returncode=0)
         if "-show_entries" in cmd and "stream=codec_type" in cmd and "a:0" in cmd:
             return MagicMock(stdout=b"audio\n", stderr=b"", returncode=0)
         if "-show_entries" in cmd and "format=duration" in cmd:

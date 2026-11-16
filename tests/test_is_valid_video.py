@@ -7,7 +7,7 @@ from src.pipeline import is_valid_video
 
 @patch("subprocess.run")
 def test_is_valid_video_success(mock_run):
-    mock_run.return_value = MagicMock(stdout=b"video\n")
+    mock_run.return_value = MagicMock(stdout=b"video\n10.5\n")
     assert is_valid_video(Path("test.mp4")) is True
     args, _ = mock_run.call_args
     cmd = args[0]
@@ -29,10 +29,34 @@ def test_is_valid_video_exception(mock_run):
 
 @patch("subprocess.run")
 def test_is_valid_video_hevc(mock_run):
-    mock_run.return_value = MagicMock(stdout=b"video\n")
+    mock_run.return_value = MagicMock(stdout=b"video\n10.5\n")
     assert is_valid_video(Path("test.hevc")) is True
     args, kwargs = mock_run.call_args
     assert "-f" in args[0]
     assert "hevc" in args[0]
     assert "--" in args[0]
     assert args[0][args[0].index("--") + 1] == "test.hevc"
+
+
+@patch("subprocess.run")
+def test_is_valid_video_nan_duration(mock_run):
+    mock_run.return_value = MagicMock(stdout=b"video\nnan\n")
+    assert is_valid_video(Path("test.mp4")) is False
+
+
+@patch("subprocess.run")
+def test_is_valid_video_inf_duration(mock_run):
+    mock_run.return_value = MagicMock(stdout=b"video\ninf\n")
+    assert is_valid_video(Path("test.mp4")) is False
+
+
+@patch("subprocess.run")
+def test_is_valid_video_negative_duration(mock_run):
+    mock_run.return_value = MagicMock(stdout=b"video\n-5.0\n")
+    assert is_valid_video(Path("test.mp4")) is False
+
+
+@patch("subprocess.run")
+def test_is_valid_video_zero_duration(mock_run):
+    mock_run.return_value = MagicMock(stdout=b"video\n0.0\n")
+    assert is_valid_video(Path("test.mp4")) is False
