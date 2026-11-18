@@ -253,6 +253,26 @@ class TestPacingAndDuration:
         total_dur = sum(s.duration for s in segments)
         assert 20.0 <= total_dur <= 30.0
 
+    def test_empty_beats_produce_valid_cut_times(self, tmp_path: Path) -> None:
+        """Ohne erkannte Beats sollen gleichmäßige Schnitte entstehen (kein Index-Fehler)."""
+        clips = []
+        for i in range(3):
+            p = tmp_path / f"c{i}.mov"
+            p.touch()
+            clips.append(ClipInfo(path=p, duration=6.0))
+
+        segments = build_segments(
+            clips,
+            {"target_min": 1.4, "target_max": 2.0, "target": 1.8, "fallback_interval": 1.8},
+            {"max_duration": 30.0},
+            durations=[],
+        )
+        assert segments, "Leere Beat-Liste sollte gültige Cuts liefern"
+        for seg in segments:
+            assert seg.start >= 0.0
+            assert seg.end > seg.start
+            assert seg.duration > 0.0
+
 
 class TestResolveFontPath:
     def test_configured_font_path_exists(self, tmp_path: Path) -> None:

@@ -246,12 +246,19 @@ def durations_from_bpm(bpm: float, cut_cfg: Mapping[str, Any]) -> list[float]:
 
 
 def _iter_durations(durations: Sequence[float], fallback: float, limit: int = 0) -> Iterator[float]:
-    """Endloser Iterator über Cut-Längen (Beat-Grid, sonst fester Takt)."""
+    """Endloser Iterator über Cut-Längen (Beat-Grid, sonst fester Takt).
+
+    Ein leeres Beat-Grid (keine erkannten Beats) liefert den Fallback-Takt,
+    sodass gleichmäßige Schnitte entstehen statt eines Index-Fehlers.
+    """
     pool = list(durations) if durations else []
     index = 0
     produced = 0
     while limit <= 0 or produced < limit:
-        yield pool[index % len(pool)] if pool else fallback
+        if pool:
+            yield pool[index % len(pool)]
+        else:
+            yield fallback
         index += 1
         produced += 1
 
