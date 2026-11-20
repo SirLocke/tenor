@@ -241,20 +241,21 @@ def _extract_and_score_strip(
     """Ein OpenCV-Durchlauf, der Frames dekodiert und bewertet."""
     strip_w, strip_h = _strip_size(width, height)
     frame_size = strip_w * strip_h
-    if frame_size <= 0:
-        return _empty_stats(), "invalid strip size"
-
-    cap = cv2.VideoCapture(str(path))
-    if not cap.isOpened():
-        return _empty_stats(), "VideoCapture konnte Datei nicht öffnen"
-
-    all_sharpness = []
-    all_luma = []
-    all_black = []
-    all_white = []
-    all_signatures = []
-
+    cap: cv2.VideoCapture | None = None
     try:
+        if frame_size <= 0:
+            return _empty_stats(), "invalid strip size"
+
+        cap = cv2.VideoCapture(str(path))
+        if not cap.isOpened():
+            return _empty_stats(), "VideoCapture konnte Datei nicht öffnen"
+
+        all_sharpness = []
+        all_luma = []
+        all_black = []
+        all_white = []
+        all_signatures = []
+
         source_fps = cap.get(cv2.CAP_PROP_FPS)
         if not math.isfinite(source_fps) or source_fps <= 0:
             source_fps = 30.0
@@ -290,11 +291,9 @@ def _extract_and_score_strip(
                 for _ in range(frames_to_skip):
                     if not cap.grab():
                         break
-
-    except Exception as e:
-        log.warning("Fehler beim Dekodieren von %s: %s", path.name, e)
     finally:
-        cap.release()
+        if cap is not None:
+            cap.release()
 
     if len(all_sharpness) == 0:
         return _empty_stats(), "keine Frames dekodiert"
