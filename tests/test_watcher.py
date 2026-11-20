@@ -759,3 +759,30 @@ def test_queue_limit_scan_existing(tmp_path, caplog):
         mock_process.assert_called_once()
         assert len(mock_process.call_args[0][0]) == 1
         assert "deckelt 2 unverarbeitete Datei(en) auf 1" in caplog.text
+
+
+def test_full_render_queue_drops_event_without_crash(tmp_path, caplog):
+    """Regression: queue.Full beim Enqueue darf den Watchdog-Thread nicht töten."""
+    import logging
+
+    from src.watcher import IngestProcessor
+
+    cfg = {"ingest_dir": str(tmp_path), "watcher": {"max_queue_size": 1}}
+    p = IngestProcessor(cfg)
+
+    f1 = tmp_path / "video1.mp4"
+    f2 = tmp_path / "video2.mp4"
+    f1.touch()
+    f2.touch()
+
+    caplog.set_level(logging.WARNING, logger="tenor.watcher")
+
+    # Renderqueue bis zum Anschlag füllen - der nächste Enqueue wirft Full.
+    p._queue.put_nowait(f1)
+    with patch("threading.Thread") as mock_thread:
+        p.on_file_event(f2)  # darf nicht Exception werfen
+        mock_thread.assert_not_called()
+
+    assert "Warteschlange voll (Max 1)" in caplog.text
+    assert f2 not in p._pending
+    assert p._queue.qsize() == 1
