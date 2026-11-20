@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import os
+import queue
 import shutil
 import signal
 import sys
@@ -311,6 +312,11 @@ class IngestProcessor:
         self.state = WatcherState.load(state_dir / STATE_FILENAME)
         self._pending: set[Path] = set()
         self._inflight: set[Path] = set()
+        # Bounded Queue für die _pending/_inflight-Einträge. `put_nowait`
+        # wirft queue.Full, sobald max_queue_size erreicht ist - dieser Fall
+        # muss im Event-Handler abgefangen werden, sonst stirbt der
+        # Watchdog-Thread und der Watcher hört auf, neue Events zu sehen.
+        self._queue: queue.Queue[Path] = queue.Queue(maxsize=self.max_queue_size)
         self._failures: dict[str, int] = {}
         self._failed_at: dict[str, float] = {}
         self._last_added: float = 0.0
@@ -334,6 +340,23 @@ class IngestProcessor:
                 lock = PathLock()
                 self._path_locks[key] = lock
             return lock
+
+    def _dequeue(self, path: Path) -> None:
+        """Entfernt ``path`` aus der Queue, ohne die anderen Einträge zu verlieren.
+
+        Muss unter ``self._lock`` aufgerufen werden, damit parallel
+        eintreffende Events die Queue nicht während des Umfüllens füllen.
+        """
+        remaining = []
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            if item != path:
+                remaining.append(item)
+        for item in remaining:
+            self._queue.put_nowait(item)
 
     def on_file_event(self, path: Path) -> None:
         """Wird vom Handler bei create/move/modify aufgerufen."""
@@ -364,6 +387,18 @@ class IngestProcessor:
                         path.name,
                     )
                     return
+                try:
+                    self._queue.put_nowait(path)
+                except queue.Full:
+                    # Volle Renderqueue darf den Event-Dispatcher nicht
+                    # töten: Event verwerfen und warnen, sonst verstummt der
+                    # Watcher für den Rest der Laufzeit.
+                    log.warning(
+                        "Warteschlange voll (Max %d) - %s wird vorerst ignoriert (Backpressure, queue.Full)",
+                        self.max_queue_size,
+                        path.name,
+                    )
+                    return
                 self._pending.add(path)
                 self._last_added = time.monotonic()
             log.info("Neue Eingang erkannt: %s", path.name)
@@ -383,6 +418,7 @@ class IngestProcessor:
             log.warning("Datei unvollständig oder entfernt, wird übersprungen: %s", path.name)
             with self._lock:
                 self._pending.discard(path)
+                self._dequeue(path)
             return
 
         with self._collect_lock:
@@ -402,6 +438,8 @@ class IngestProcessor:
             finally:
                 with self._lock:
                     self._inflight.difference_update(batch)
+                    for path in batch:
+                        self._dequeue(path)
 
     def _await_batch_window(self) -> None:
         """Wartet, bis sich im Batch-Fenster nichts Neues mehr tut."""
