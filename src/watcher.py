@@ -559,13 +559,16 @@ class IngestProcessor:
             self.ingest_dir, self.extensions, recursive=self.recursive, ignore_dirs=self.ignore_dirs
         )
         fresh = []
-        for p in files:
-            try:
-                if not self.state.is_processed(p):
-                    fresh.append(p)
-            except FileNotFoundError:
-                # Datei wurde zwischenzeitlich gelöscht - überspringen
-                pass
+        try:
+            for p in files:
+                try:
+                    if not self.state.is_processed(p):
+                        fresh.append(p)
+                except FileNotFoundError:
+                    # Datei wurde zwischenzeitlich gelöscht - überspringen
+                    pass
+        except PermissionError as exc:
+            log.warning("Ingest-Scan überspringt nicht lesbaren Ordner: %s", exc)
         if not fresh:
             log.info("Keine unverarbeiteten Clips im Ingest-Ordner")
             return 0
