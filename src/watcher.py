@@ -555,11 +555,11 @@ class IngestProcessor:
 
     def scan_existing(self) -> int:
         """Verarbeitet beim Start bereits vorhandene, unbekannte Clips."""
-        files = iter_media_files(
-            self.ingest_dir, self.extensions, recursive=self.recursive, ignore_dirs=self.ignore_dirs
-        )
         fresh = []
         try:
+            files = iter_media_files(
+                self.ingest_dir, self.extensions, recursive=self.recursive, ignore_dirs=self.ignore_dirs
+            )
             for p in files:
                 try:
                     if not self.state.is_processed(p):
