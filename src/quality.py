@@ -269,7 +269,12 @@ def _extract_and_score_strip(
         while True:
             ret, frame = cap.read()
             if not ret:
+                if len(all_sharpness) == 0:
+                    log.warning("Undekodierbarer Frame in %s - breche Dekodierung ab", path.name)
                 break
+            if frame is None or frame.size == 0:
+                log.warning("Leerer oder undekodierbarer Frame in %s - überspringe Frame", path.name)
+                continue
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             small = cv2.resize(gray, (strip_w, strip_h), interpolation=cv2.INTER_AREA)
@@ -296,7 +301,7 @@ def _extract_and_score_strip(
             cap.release()
 
     if len(all_sharpness) == 0:
-        return _empty_stats(), "keine Frames dekodiert"
+        return _empty_stats(), "keine Frames dekodiert (undekodierbar/korrupt)"
 
     res_sharpness = np.array(all_sharpness, dtype=np.float32)
     res_luma = np.array(all_luma, dtype=np.float32)

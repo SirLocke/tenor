@@ -838,6 +838,82 @@ def test_quality_config_validation() -> None:
         QualityConfig(duplicate_threshold=-5.0)
 
 
+def test_undecodable_frame_logs_warning_and_skips(caplog: pytest.LogCaptureFixture) -> None:
+    """Regression: cap.read() == False (korruptes Segment) darf nicht crashen.
+
+    Ohne den Fix landete ein None-Frame in cv2.cvtColor und riss den ganzen
+    Lauf ab; stattdessen muss eine Warnung entstehen und die Analyse als
+    nicht auswertbar zurückkommen.
+    """
+    from unittest.mock import patch
+
+    from src.quality import _extract_and_score_strip
+
+    class _FakeCap:
+        def isOpened(self) -> bool:
+            return True
+
+        def get(self, _prop: int) -> float:
+            return 30.0
+
+        def read(self) -> tuple[bool, None]:
+            return False, None
+
+        def grab(self) -> bool:
+            return False
+
+        def release(self) -> None:
+            pass
+
+    with (
+        patch("src.quality.cv2.VideoCapture", return_value=_FakeCap()),
+        caplog.at_level("WARNING", logger="tenor.quality"),
+    ):
+        stats, error = _extract_and_score_strip(Path("kaputt.mov"), 1920, 1080, 4.0, 60.0)
+
+    assert error is not None
+    assert stats[0].size == 0
+    assert any("Undekodierbarer Frame" in record.message for record in caplog.records)
+
+
+def test_none_frame_skipped_and_normal_eof_no_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """Leere Frames bei ret=True werden übersprungen; normales EOF warnt nicht."""
+    from unittest.mock import patch
+
+    from src.quality import _extract_and_score_strip
+
+    valid_frame = np.full((64, 64, 3), 128, dtype=np.uint8)
+    reads = iter([(True, None), (True, valid_frame), (False, None)])
+
+    class _FakeCap:
+        def isOpened(self) -> bool:
+            return True
+
+        def get(self, _prop: int) -> float:
+            return 30.0
+
+        def read(self) -> tuple[bool, np.ndarray | None]:
+            return next(reads, (False, None))
+
+        def grab(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            pass
+
+    with (
+        patch("src.quality.cv2.VideoCapture", return_value=_FakeCap()),
+        caplog.at_level("WARNING", logger="tenor.quality"),
+    ):
+        stats, error = _extract_and_score_strip(Path("partial.mov"), 1920, 1080, 4.0, 60.0)
+
+    assert error is None
+    assert len(stats[0]) == 1
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "Leerer oder undekodierbarer Frame" in warnings[0].message
+
+
 def test_find_highlights_mismatched_lengths() -> None:
     analysis = _analysis(duration=10.0, frames=40)
     cfg = QualityConfig(enabled=True)
