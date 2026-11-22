@@ -82,11 +82,11 @@ Unterordner.
 
   Musik steuert **immer** den Schnitttakt. Ob sie auch *im Reel* zu hören ist,
   entscheidet die Wahl: nur eine **bewusst gewählte** Musik wird untergemischt
-  (`-m <datei>` – auch aus dem Homelab – oder `-m auto`, das auf `music.file`
+  (`-m <datei>` – auch bei externer Auswahl – oder `-m auto`, das auf `music.file`
   zeigt). Ein Lauf ohne `-m` bleibt stumm; der Automatismus
   (`spotify.track_file`, neueste Datei aus `music_dir`) liefert weiterhin nur den
-  Takt. Genau dieser Unterschied war die Ursache für stumme Reels: die Auswahl
-  im Homelab kam als `-m` an und steuerte den Schnitt – der Export schrieb die
+  Takt. Genau dieser Unterschied war die Ursache für stumme Reels: eine explizite
+  Auswahl kam als `-m` an und steuerte den Schnitt – der Export schrieb die
   Spur aber nicht ins Video.
 - **Musik im Reel** – liegt bewusst gewählte Musik vor, wird sie unter das
   fertige Bild gelegt: auf die Reellänge gebracht (kürzere Tracks loopen,
@@ -303,11 +303,11 @@ der ausgeschaltete Wert `255` bzw. `1.0`.
 ```
 
 Wichtige Flags der Pipeline: `--no-cover`, `--no-geo` (ohne Netzwerk),
-`--limit N`, `--json`, `--delete-after` (Rohclits nach Export löschen),
+`--limit N`, `--json`, `--delete-after` (Rohclips nach Export löschen),
 `--audio` / `--no-audio` (Ton an/aus), `--dry-run`, `--fit crop|blur|pad`,
 `--pace fast|medium|slow` und `--bpm N`. Mit `--single-reel` (Alias `--merge-days`) werden Clips aus
 mehreren Aufnahmetagen bewusst in *einem* Reel gebündelt statt pro Tag getrennt
-(der Homelab-Selector nutzt das bei Mehrfachauswahl). `--json` meldet mit
+(nützlich bei Mehrfachauswahl über mehrere Tage). `--json` meldet mit
 `beat_source` die tatsächlich verwendete Beat-Quelle und mit `beat_note` eine
 Erklärung, falls die gewünschte Quelle nicht nutzbar war.
 
@@ -499,8 +499,8 @@ ist damit **nie** die Tonquelle. Ist Spotify blockiert, wird stattdessen
 `spotify.track_file` (bzw. die neueste Datei im `music_dir`) als Beat-Quelle
 genutzt; nur wenn auch das fehlt, greift der BPM-Fallback. Auch diese
 Automatik steuert ausschließlich den Schnittplan; untergemischt wird Musik nur
-als **lokale Datei**, die bewusst gewählt wurde – `-m <datei>`, die
-Homelab-Auswahl oder `-m auto` (zeigt auf `music.file`). Originalton kommt über
+als **lokale Datei**, die bewusst gewählt wurde – etwa per `-m <datei>`
+oder `-m auto` (zeigt auf `music.file`). Originalton kommt über
 `video.audio: true` bzw. `--audio` ins Reel, dann gedämpft unter der Musik
 (siehe [Features](#features)).
 

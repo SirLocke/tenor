@@ -68,7 +68,7 @@ tenor-watcher = "src.watcher:main"
 tenor-metadata = "src.metadata:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
 include = ["src*"]
 
 [tool.ruff]

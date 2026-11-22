@@ -10,7 +10,7 @@ ingest_dir: ~/video-cut/ingest
 output_dir: ~/video-cut/output
 # Musik: MP3s fuer Beat-Matching. Die neueste Datei liefert nur den Takt; als
 # Ton ins Reel kommt Musik nur, wenn sie bewusst gewaehlt wurde (-m <datei>,
-# Homelab-Auswahl oder -m auto auf music.file unten).
+# explizite CLI-Auswahl oder -m auto auf music.file unten).
 music_dir: ~/video-cut/music
 
 # Als Rohmaterial akzeptierte Endungen (case-insensitiv geprüft).
@@ -37,7 +37,7 @@ video:
   # Audio ist ein Opt-in. Mit false (Default) bleibt das Reel ohne Originalton.
   # Mit true wandert der Ton der Rohclips ins Reel - und liegt Musik darunter,
   # laeuft der Originalton gedämpft darunter. Musik wird nur bei bewusster Wahl
-  # untergemischt (-m <datei>, Homelab-Auswahl oder -m auto); der
+  # untergemischt (-m <datei>, explizite CLI-Auswahl oder -m auto); der
   # Watcher-Automatismus (neueste Datei aus music_dir, spotify.track_file)
   # steuert nur den Schnitttakt.
   # Auch nachtraeglich per CLI: --audio / --no-audio
@@ -58,7 +58,7 @@ video:
 # Musik im fertigen Reel
 # -----------------------------------------------------------------------------
 # Wichtig: Musik wird NUR untergemischt, wenn sie bewusst als *Ton* gewaehlt
-# wurde - per `-m <datei>` (auch aus dem Homelab) oder per `-m auto`, das auf
+# wurde - per `-m <datei>` (direkt oder über externe Aufrufe) oder per `-m auto`, das auf
 # `file` bzw. TENOR_MUSIC_FILE zeigt. Ein Lauf *ohne* `-m` bleibt stumm: der
 # Watcher-Automatismus (neueste Datei aus music_dir, spotify.track_file) liefert
 # nur den Takt fuer den Schnittplan. Das ist Absicht - niemand hat in einem

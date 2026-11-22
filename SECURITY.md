@@ -6,8 +6,8 @@ We release security patches for the following versions:
 
 | Version | Supported |
 |---------|-----------|
-| 1.0.x   | ✅        |
-| < 1.0   | ❌        |
+| 1.0.x   | Yes       |
+| < 1.0   | No        |
 
 ## Reporting a Vulnerability
 
@@ -67,7 +67,7 @@ Please provide:
 
 - Dependencies pinned in `pyproject.toml` / `requirements.txt`
 - CI runs on every PR; Dependabot alerts monitored
-- Report vulnerable dependencies via security email
+- Report vulnerable dependencies via GitHub's private vulnerability reporting
 
 ## Scope
 
