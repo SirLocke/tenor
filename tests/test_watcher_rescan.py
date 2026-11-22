@@ -1,3 +1,4 @@
+import logging
 import threading
 from unittest.mock import patch
 
@@ -78,3 +79,20 @@ def test_watch_loop_rescan(
     # 2nd loop iter: monotonic is 61, last_scan is 0. 61 >= 60, scan happens!
     # 3rd loop iter: monotonic is 122, last_scan is 61. 122-61 >= 60, scan happens! loop stops.
     assert mock_scan_existing.call_count == 2
+
+
+@patch("src.watcher.iter_media_files")
+def test_scan_existing_permission_error(mock_iter_media_files, tmp_path, caplog):
+    """Ein unlesbarer Unterordner darf den Rescan nicht abbrechen."""
+    mock_iter_media_files.side_effect = PermissionError("Keine Berechtigung")
+
+    ingest_dir = tmp_path / "test_ingest"
+    ingest_dir.mkdir()
+    cfg = {"ingest_dir": str(ingest_dir)}
+    processor = IngestProcessor(cfg)
+
+    with caplog.at_level(logging.WARNING):
+        result = processor.scan_existing()
+
+    assert result == 0
+    assert "nicht lesbaren Ordner" in caplog.text
