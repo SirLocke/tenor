@@ -26,4 +26,4 @@ watchdog==7.1.0             # inotify-Events auf dem NAS-Mount
 
 # --- Tests / Linting (nur Entwicklung, nicht für den Betrieb) ---
 pytest==9.2.0
-ruff==0.17.4
+ruff==0.17.5
