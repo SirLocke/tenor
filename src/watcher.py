@@ -32,6 +32,7 @@ from watchdog.observers import Observer
 
 from . import (
     ConfigError,
+    __version__,
     expand_path,
     get,
     iter_media_files,
@@ -785,6 +786,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="beim Start keine vorhandenen Dateien einlesen",
     )
     parser.add_argument("-q", "--quiet", action="store_true", help="nur Warnungen und Fehler loggen")
+    parser.add_argument("-V", "--version", action="version", version=f"tenor {__version__}")
     args = parser.parse_args(argv)
 
     try:

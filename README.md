@@ -1,5 +1,9 @@
 # tenor
 
+[![CI](https://github.com/SirLocke/tenor/actions/workflows/ci.yml/badge.svg)](https://github.com/SirLocke/tenor/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
+
 Automatische Video-Pipeline für den Heimserver: überwacht einen Ingest-Ordner,
 ordnet iPhone-Clips chronologisch, schneidet sie auf den Beat, versieht sie mit
 einem Dark-Film-Grading und exportiert **1080x1920 (9:16)** Reels/Shorts
@@ -170,12 +174,22 @@ git clone https://github.com/SirLocke/tenor.git ~/video-cut
 cd ~/video-cut
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -e .          # stellt auch tenor, tenor-watcher, tenor-metadata bereit
+# Alternativ nur Abhängigkeiten ohne Paket-Installation:
+# .venv/bin/pip install -r requirements.txt
 ```
 
 ### 3. Konfiguration
 
-`config.yaml` anpassen – mindestens `ingest_dir`, `output_dir`, `music_dir`:
+`config.yaml` anpassen – oder für maschinenspezifische Overrides eine lokale
+Datei aus der Vorlage anlegen (wird automatisch über `config.yaml` gemergt
+und ist per `.gitignore` ausgeschlossen):
+
+```bash
+cp config.local.yaml.example config.local.yaml
+```
+
+Mindestens `ingest_dir`, `output_dir`, `music_dir` prüfen:
 
 ```yaml
 ingest_dir: ~/video-cut/ingest
@@ -275,6 +289,9 @@ der ausgeschaltete Wert `255` bzw. `1.0`.
 
 ## CLI-Nutzung
 
+Nach Installation via `pip install -e .` stehen direkt die Befehle `tenor`,
+`tenor-watcher` und `tenor-metadata` bereit (alternativ `python -m src.pipeline` usw.):
+
 ```bash
 # Kompletter Ordner, Beat-Matching über die neueste MP3 im music_dir.
 # Ohne -t wird der Ordnername unterhalb von ingest_dir zum Tripnamen.
@@ -292,8 +309,17 @@ der ausgeschaltete Wert `255` bzw. `1.0`.
 # Mit Originalton der Clips - Musik liegt gedämpft darunter
 .venv/bin/python -m src.pipeline -i clip.MOV -m song.mp3 --audio
 
+# Querformat-Clips ohne Zuschneiden über Blur-Hintergrund + Dark-Film-Grading + schnelles Tempo
+.venv/bin/python -m src.pipeline -i ~/video-cut/ingest --fit blur --grade cinematic --pace fast
+
+# Feste BPM, maximale Reeldauer (30 s) und alle Tage in einem Reel bündeln
+.venv/bin/python -m src.pipeline -i ~/video-cut/ingest --bpm 128 --duration 30 --single-reel
+
 # Nur den Schnittplan ansehen, kein Export (legt nichts an)
 .venv/bin/python -m src.pipeline -i ~/video-cut/ingest --dry-run
+
+# Version anzeigen
+.venv/bin/python -m src.pipeline --version
 
 # Metadaten inspizieren (Debug)
 .venv/bin/python -m src.metadata -i ~/video-cut/ingest
@@ -303,13 +329,15 @@ der ausgeschaltete Wert `255` bzw. `1.0`.
 ```
 
 Wichtige Flags der Pipeline: `--no-cover`, `--no-geo` (ohne Netzwerk),
-`--limit N`, `--json`, `--delete-after` (Rohclips nach Export löschen),
-`--audio` / `--no-audio` (Ton an/aus), `--dry-run`, `--fit crop|blur|pad`,
-`--pace fast|medium|slow` und `--bpm N`. Mit `--single-reel` (Alias `--merge-days`) werden Clips aus
-mehreren Aufnahmetagen bewusst in *einem* Reel gebündelt statt pro Tag getrennt
-(nützlich bei Mehrfachauswahl über mehrere Tage). `--json` meldet mit
-`beat_source` die tatsächlich verwendete Beat-Quelle und mit `beat_note` eine
-Erklärung, falls die gewünschte Quelle nicht nutzbar war.
+`--limit N`, `--duration SEC`, `--grade natural|original|cinematic`,
+`--fit crop|blur|pad`, `--pace fast|medium|slow`, `--bpm N`, `--json`,
+`--delete-after` (Rohclips nach Export löschen), `--audio` / `--no-audio`
+(Ton an/aus), `--dry-run` und `-V` / `--version`. Mit `--single-reel`
+(Alias `--merge-days`) werden Clips aus mehreren Aufnahmetagen bewusst in
+*einem* Reel gebündelt statt pro Tag getrennt (nützlich bei Mehrfachauswahl über
+mehrere Tage). `--json` meldet mit `beat_source` die tatsächlich verwendete
+Beat-Quelle und mit `beat_note` eine Erklärung, falls die gewünschte Quelle
+nicht nutzbar war.
 
 ### Ausgabe
 
@@ -379,25 +407,51 @@ aktivieren (Variante oben) – er überwacht rekursiv.
 Alle Pfade in der Unit stehen als `%h/…` (Home des Users). Wenn das Repo woanders
 liegt, `WorkingDirectory=` und `ExecStart=` anpassen.
 
+## Docker
+
+```bash
+# Image bauen
+docker build -t tenor:latest .
+
+# Schnittplan prüfen (Dry-Run)
+docker run --rm \
+  -v ~/video-cut/ingest:/data/ingest:ro \
+  -v ~/video-cut/output:/data/output \
+  -v ~/video-cut/music:/data/music:ro \
+  tenor:latest -i /data/ingest --dry-run
+
+# Optional mit eigener Config und Spotify-Umgebungsdatei
+docker run --rm \
+  -v ~/video-cut/ingest:/data/ingest:ro \
+  -v ~/video-cut/output:/data/output \
+  -v ~/video-cut/music:/data/music:ro \
+  -v ~/video-cut/config.local.yaml:/home/tenor/config.yaml:ro \
+  --env-file ~/.config/tenor/spotify.env \
+  tenor:latest -i /data/ingest --fit blur --grade cinematic
+```
+
 ## Projektstruktur
 
 ```
 tenor/
-├── .gitignore          # ignoriert .venv, Roh-/Audioformate, Render-Artefakte, Output
+├── .gitignore                # ignoriert .venv, Roh-/Audioformate, Render-Artefakte, Output
+├── Dockerfile                # Non-Root-Container (Python 3.12 + ffmpeg + fonts-roboto)
+├── justfile                  # Entwicklungs- und Docker-Rezepte
 ├── README.md
-├── requirements.txt    # gepinnte Abhängigkeiten
-├── pyproject.toml      # Packaging, Ruff/MyPy/Pytest-Konfiguration
-├── config.yaml         # Pfade, Grading, Typografie, Watcher, Spotify (generisch)
-├── config.local.yaml   # optional, nicht eingecheckt: lokale Pfade/Overrides
+├── requirements.txt          # gepinnte Abhängigkeiten
+├── pyproject.toml            # Packaging, Ruff/MyPy/Pytest-Konfiguration
+├── config.yaml               # Pfade, Grading, Typografie, Watcher, Spotify (generisch)
+├── config.local.yaml.example # Vorlage für lokale Overrides (nach config.local.yaml kopieren)
+├── spotify.env.example       # Vorlage für Spotify-Credentials
 ├── src/
-│   ├── __init__.py     # Konfigurations-Infrastruktur (Defaults + Deep-Merge + Env)
-│   ├── pipeline.py     # Beat-Matching, Schnittplan, Rendern, Export, Cover, CLI
-│   ├── metadata.py     # ffprobe, ISO-6709, Reverse-Geocoding, Sortierung, CLI
-│   ├── quality.py      # Bildqualitäts-Gate: Strip-Analyse, Fenster-Planung, Cache
-│   ├── spotify_beats.py# Spotify Audio-Analysis (optional, thread-sicherer Token-Cache)
-│   ├── styling.py      # LUT-Grading, Center-Crop, Font-Auflösung, Text-Overlay
-│   └── watcher.py      # watchdog-Ingest mit Debounce + Batch-Fenster
-├── tests/              # pytest-Suite (siehe "Tests")
+│   ├── __init__.py           # Konfigurations-Infrastruktur (Defaults + Deep-Merge + Env)
+│   ├── pipeline.py           # Beat-Matching, Schnittplan, Rendern, Export, Cover, CLI
+│   ├── metadata.py           # ffprobe, ISO-6709, Reverse-Geocoding, Sortierung, CLI
+│   ├── quality.py            # Bildqualitäts-Gate: Strip-Analyse, Fenster-Planung, Cache
+│   ├── spotify_beats.py      # Spotify Audio-Analysis (optional, thread-sicherer Token-Cache)
+│   ├── styling.py            # LUT-Grading, Center-Crop, Font-Auflösung, Text-Overlay
+│   └── watcher.py            # watchdog-Ingest mit Debounce + Batch-Fenster
+├── tests/                    # pytest-Suite (23 Testmodule, siehe "Tests")
 └── systemd/
     ├── tenor-watcher.service
     └── tenor-watcher.path
@@ -519,13 +573,16 @@ BPM-Fallback und die Cut-Positionen:
 
 | Datei | Schwerpunkt |
 | --- | --- |
-| `test_stability.py` | Regressionen: Watcher-Event-Handler, State-Datei, BPM-Fallback, Cut-Positionen |
-| `test_quality.py` | Kalibrierung des Qualitäts-Gates + "verliert nie Material" |
-| `test_merge_days.py` | `--single-reel` / `--merge-days` |
-| `test_metadata_cli.py`, `test_metadata_validation.py` | ffprobe-Parsing, ISO-6709, Koordinaten-Validierung |
+| `test_config.py` | Config-Laden, Deep-Merge, `TENOR_*`-Env-Overrides |
+| `test_pipeline_cli.py`, `test_pipeline_export_and_run.py`, `test_pipeline_name_collision.py`, `test_pipeline_performance.py` | Pipeline-CLI, Export/Run, Dateinamenskollisionen, 10-bit/ffprobe-Deduplizierung |
+| `test_fit_mode.py`, `test_is_valid_video.py`, `test_rotation.py`, `test_output_name_fallback.py`, `test_merge_days.py` | Framing (`crop`/`blur`/`pad`), Video-Validierung, Rotation, Dateinamen-Fallback, `--single-reel` |
+| `test_quality.py` | Kalibrierung des Qualitäts-Gates, Frame-Dekodierungs-Guards, "verliert nie Material" |
+| `test_metadata.py`, `test_metadata_cli.py`, `test_metadata_validation.py` | ffprobe-Parsing, ISO-6709, Koordinaten-Validierung, CLI |
+| `test_spotify_beats.py`, `test_spotify_beats_validation.py` | Spotify Audio-Analysis, Token-Cache, URI/Track-Validierung, Fehlerpfade |
+| `test_styling.py`, `test_styling_and_pacing.py` | Grading-LUT, Presets, Typografie, Pacing |
+| `test_watcher.py`, `test_watcher_rescan.py`, `test_watcher_shutdown.py` | Watcher-Ingest, Queue-Limit, Rescan-Fehlertoleranz, Shutdown |
+| `test_stability.py` | Regressionen: Event-Handler, State-Datei, BPM-Fallback, Cut-Positionen |
 | `test_nextcloud_scan.py` | Nextcloud-Scan (inkl. Command-Injection-Schutz) |
-| `test_spotify_beats.py` | Spotify Audio-Analysis, Token-Cache, Fehlerpfade |
-| `test_styling_and_pacing.py` | Grading-LUT, Typografie, Pacing |
 
 `ruff`/`mypy`-/`pytest`-Konfiguration steht in `pyproject.toml`; dieselben
 Checks laufen in der CI.
@@ -547,3 +604,10 @@ Material *kalibriert* und nicht hergeleitet sind:
 
 `0` = Reel geschrieben (oder `--dry-run` erfolgreich), `1` = kein Export
 möglich, `2` = Konfigurations-/Aufruffehler.
+
+## Lizenz & Mitwirken
+
+- **Lizenz:** [MIT](LICENSE)
+- **Mitwirken:** [CONTRIBUTING.md](CONTRIBUTING.md) und [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- **Sicherheit:** [SECURITY.md](SECURITY.md) (bitte über GitHub Private Vulnerability Reporting melden)
+- **Änderungen:** [CHANGELOG.md](CHANGELOG.md)

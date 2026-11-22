@@ -45,7 +45,7 @@ DEFAULTS: dict[str, Any] = {
     "music_dir": "~/video-cut/music",
     "extensions": [".mov", ".mp4", ".m4v", ".hevc", ".h265"],
     # Musik, die als *Ton* ins Reel gemischt wird. Ohne `file` wird nichts
-    # gemischt - die Auswahl im Homelab kommt als `-m` daher. `original_gain`
+    # gemischt - explizite Musikauswahl kommt als `-m` daher. `original_gain`
     # legt fest, wie laut der Originalton der Clips unter der Musik bleibt.
     "music": {
         "file": "",
@@ -66,7 +66,7 @@ DEFAULTS: dict[str, Any] = {
         "original_gain": 0.25,
         # Audio ist ein Opt-in: mit ``true`` wandert der Originalton der
         # Rohclips in das Reel. Musik wird nur bei *bewusster* Wahl
-        # (``-m``, Homelab-Auswahl, ``music.file``) untergemischt und der
+        # (``-m``, explizite CLI-Auswahl, ``music.file``) untergemischt und der
         # Originalton läuft dann gedämpft darunter.
         "audio": False,
         "audio_codec": "aac",

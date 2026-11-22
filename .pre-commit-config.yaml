@@ -6,7 +6,7 @@
 repos:
   # Ruff: fast Python linter + formatter (replaces flake8, isort, black, pyupgrade, etc.)
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.9
+    rev: v0.17.5
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
@@ -21,18 +21,18 @@ repos:
       - id: mypy
         additional_dependencies: [
           "moviepy==2.2.1",
-          "numpy==2.5.3",
+          "numpy==2.5.4",
           "opencv-python-headless==5.0.0.93",
           "pillow==11.3.0",
-          "librosa==1.0.0",
+          "librosa==1.0.1",
           "geopy==2.5.0",
           "PyYAML==6.0.3",
           "requests>=2.31.0",
-          "watchdog==6.0.0",
+          "watchdog==7.1.0",
           "types-requests",
           "types-PyYAML",
         ]
-        args: [--strict, --show-error-codes]
+        args: [--config-file=pyproject.toml]
         types_or: [python, pyi]
 
   # Check for merge conflicts

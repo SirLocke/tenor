@@ -19,6 +19,7 @@ from typing import Any
 
 from . import (
     ConfigError,
+    __version__,
     expand_path,
     get,
     iter_media_files,
@@ -681,6 +682,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("-c", "--config", help="Pfad zur config.yaml")
     parser.add_argument("--json", action="store_true", help="Ausgabe als JSON")
     parser.add_argument("--no-geo", action="store_true", help="Reverse-Geocoding überspringen")
+    parser.add_argument("-V", "--version", action="version", version=f"tenor {__version__}")
     args = parser.parse_args(argv)
 
     try:

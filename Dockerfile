@@ -2,7 +2,7 @@
 # Build: docker build -t tenor .
 # Run: docker run --rm -v /host/ingest:/data/ingest -v /host/output:/data/output tenor
 
-FROM python:3.15-slim-bookworm
+FROM python:3.12-slim-bookworm
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -26,8 +26,8 @@ ENV TENOR_INGEST_DIR=/data/ingest \
     TENOR_MUSIC_DIR=/data/music \
     TENOR_CONFIG=/home/tenor/config.yaml
 
-# Config file (user mounts their own)
-# COPY --chown=tenor:tenor config.yaml ./config.yaml
+# Default config (can be overridden by bind-mounting /home/tenor/config.yaml)
+COPY --chown=tenor:tenor config.yaml ./config.yaml
 
 # Entrypoint
 ENTRYPOINT ["python", "-m", "src.pipeline"]

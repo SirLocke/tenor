@@ -7,91 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- Initial open-source release preparation
-- LICENSE (MIT)
-- pyproject.toml with modern packaging
-- GitHub Actions CI workflow (lint, type-check, test, build, publish)
-- CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md
-- Pre-commit configuration
-- GitHub issue and PR templates
-
-### Changed
-- N/A
-
-### Deprecated
-- N/A
-
-### Removed
-- N/A
-
-### Fixed
-- N/A
-
-### Security
-- N/A
-
 ---
 
-## [1.0.0] - 2026-09-28
+## [1.0.0] - 2026-11-22
 
 ### Added
-- **Core Pipeline**: Ingest → metadata extraction → beat-matching → quality gate → Dark-Film grading → 9:16 export
-- **Beat Matching**: Three-tier fallback (Spotify Audio Analysis → local audio file via librosa → BPM fallback)
-- **Quality Gate**: Sharpness, luma, black/white ratios, duplicate detection with window search
-- **Dark-Film Grading**: 256-entry LUT (gamma, S-curve, matte black toe, highlight roll-off) + color stage
+- **Core Pipeline**: Ingest -> metadata extraction -> beat-matching -> quality gate -> grading -> 9:16 export
+- **Framing Modes**: `crop` (center-crop), `blur` (blurred/darkened background), and `pad` (letterbox/pillarbox) for non-9:16 clips (`--fit` / `video.fit_mode`)
+- **Grading Presets**: `natural` (default), `cinematic` (Dark-Film LUT + color stage), and `original` (`--grade` / `style.preset`)
+- **Pacing & Duration Controls**: `--pace` (`fast`/`medium`/`slow`), `--bpm`, `--duration`, and `--single-reel` / `--merge-days`
+- **Beat Matching**: Three-tier fallback (Spotify Audio Analysis -> local audio file via librosa -> BPM fallback)
+- **Quality Gate**: Sharpness, luma, black/white ratios, duplicate detection with window search, and undecodable/empty frame skipping
 - **Typography**: Right-aligned, no-box text overlay with drop shadow, safe-zone positioning
-- **Watcher**: watchdog-based ingest with debounce, batch window, retry logic, state persistence
-- **Systemd Integration**: Service + path units for user-mode automation
-- **Configuration**: YAML + environment variable overrides with deep merge
+- **Watcher**: watchdog-based ingest with debounce, batch window, `max_queue_size` backpressure, retry logic, PermissionError tolerance, and atomic `.bak` state persistence
+- **Systemd & Docker**: User-mode systemd units (`tenor-watcher.service`, `tenor-watcher.path`), `Dockerfile`, and `justfile`
+- **Configuration**: `config.yaml`, `config.local.yaml` local override overlay (`config.local.yaml.example`), and `TENOR_*` environment variables
 - **Geocoding**: Reverse geocoding via Nominatim with persistent cache
-- **Cover Thumbnail**: Auto-generated at 0.5s mark
-- **Multi-day Trips**: Automatic per-day Reel separation
-- **Music Handling**: Conscious choice for audio mix vs. beat-only sources
-- **Original Audio**: Optional clip audio export with gain control under music
-- **Comprehensive Tests**: 4 test modules covering stability, quality, styling, metadata
-- **CLI**: Full-featured pipeline, watcher, and metadata inspection commands
+- **Cover Thumbnail & Audio**: Auto-generated cover at 0.5s mark, optional original clip audio (`--audio`) mixed cleanly under music (`-m`)
+- **CLI**: `tenor`, `tenor-watcher`, and `tenor-metadata` entrypoints with `--json` feedback, validation, and `--version`
+- **Open-Source Infrastructure**: MIT `LICENSE`, `pyproject.toml`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, pre-commit hooks, GitHub issue/PR templates, and GitHub Actions CI (`ubuntu-latest`)
+- **Tests**: 23 test modules covering pipeline, watcher, quality gate, metadata, styling, pacing, Spotify beats, config, and Nextcloud integration
 
 ### Changed
-- N/A
-
-### Deprecated
-- N/A
-
-### Removed
-- N/A
+- Deduplicated 10-bit transcode, `ffprobe`, and process-cleanup calls for faster batch exports
+- Decomposed pipeline run/export internals and hardened cleanup & state handling
 
 ### Fixed
-- Watcher "deaf" bug: IngestHandler missing `ingest_dir` attribute
-- State file corruption resilience: atomic writes + .bak fallback
-- Audio channel mismatch: mono/stereo mixing handled gracefully
-- Spotify 403 handling: explicit fallback with clear logging
-- Quality gate: never loses unevaluable material
+- Watcher "deaf" bug and full-queue crash protection
+- State file corruption resilience via atomic writes and `.bak` fallback
+- Audio channel mismatch when mixing mono/stereo sources
+- Spotify HTTP 403 handling with explicit fallback logging and JSON `beat_note`
+- Quality gate safeguards against zero/missing FPS, NaN/infinite clip durations, and undecodable frames
+- Package discovery in `pyproject.toml` so wheels include all `src` modules
 
 ### Security
-- No new privileges, private tmp, protected system/home in systemd units
-- Secrets via environment files, never in config.yaml
-
----
-
-## Template for Future Releases
-
-## [X.Y.Z] - YYYY-MM-DD
-
-### Added
-- 
-
-### Changed
-- 
-
-### Deprecated
-- 
-
-### Removed
-- 
-
-### Fixed
-- 
-
-### Security
--
+- Prevented `ffprobe`/`ffmpeg` option injection via `--` separator
+- Prevented Nextcloud scan command injection via `shlex.split` without shell execution
+- Systemd hardening (`NoNewPrivileges`, `PrivateTmp`, `ProtectSystem`, `ProtectHome`)
+- Secrets isolated in environment files (`spotify.env.example`), never stored in `config.yaml`

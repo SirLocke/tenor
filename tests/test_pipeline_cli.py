@@ -376,3 +376,16 @@ def test_missing_music_logs_warning_instead_of_schnitttakt(
         record.levelno == logging.WARNING and "nicht nutzbar - Export ohne Musikton" in record.message
         for record in caplog.records
     )
+
+
+def test_cli_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    from src import __version__
+    from src.metadata import main as metadata_main
+    from src.watcher import main as watcher_main
+
+    for entrypoint in (main, watcher_main, metadata_main):
+        with pytest.raises(SystemExit) as exc_info:
+            entrypoint(["--version"])
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        assert f"tenor {__version__}" in captured.out

@@ -31,6 +31,7 @@ import numpy as np
 
 from . import (
     ConfigError,
+    __version__,
     ensure_dir,
     expand_path,
     get,
@@ -2736,6 +2737,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lossless", action="store_true", help="verlustfrei exportieren (CRF 0, ultrafast)")
     parser.add_argument("--json", action="store_true", help="Ergebnis als JSON auf stdout")
     parser.add_argument("-q", "--quiet", action="store_true", help="nur Warnungen und Fehler loggen")
+    parser.add_argument("-V", "--version", action="version", version=f"tenor {__version__}")
     return parser
 
 

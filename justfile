@@ -44,7 +44,7 @@ test-watch:
 
 # Quality gate (all checks)
 check: lint fmt-check typecheck test
-	@echo "✅ All checks passed!"
+	@echo "All checks passed."
 
 # Pipeline commands
 run-pipeline:
@@ -75,16 +75,17 @@ clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
 
-# Docker (if Dockerfile exists)
+# Docker
 docker-build:
 	docker build -t tenor:latest .
 
 docker-run:
 	docker run --rm -it \
-	  -v ~/video-cut:~/video-cut \
-	  -v ~/.config/tenor:/root/.config/tenor \
+	  -v ~/video-cut/ingest:/data/ingest:ro \
+	  -v ~/video-cut/output:/data/output \
+	  -v ~/video-cut/music:/data/music:ro \
 	  tenor:latest \
-	  python -m src.pipeline -i ~/video-cut/ingest --dry-run
+	  -i /data/ingest --dry-run
 
 # Systemd (local user install)
 systemd-install:

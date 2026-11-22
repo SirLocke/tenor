@@ -61,7 +61,7 @@ updates:
     commit-message:
       prefix: "chore(ci)"
 
-  # Docker (if Dockerfile added later)
+  # Docker
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
@@ -75,3 +75,6 @@ updates:
       - "docker"
     commit-message:
       prefix: "chore(docker)"
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]

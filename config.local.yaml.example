@@ -1,0 +1,33 @@
+# =============================================================================
+# tenor - Beispiel für lokale Konfigurations-Overrides
+#
+# Kopieren nach config.local.yaml (ist in .gitignore ausgeschlossen):
+#   cp config.local.yaml.example config.local.yaml
+#
+# Alle hier gesetzten Keys werden automatisch tief über config.yaml gemergt.
+# Nicht benötigte Blöcke einfach auskommentiert lassen oder löschen.
+# =============================================================================
+
+# Verzeichnisse (z. B. lokales NAS oder USB-Mount)
+# ingest_dir: /srv/media/video-cut/ingest
+# output_dir: /srv/media/video-cut/output
+# music_dir: /srv/media/video-cut/music
+
+# video:
+#   fit_mode: blur       # crop | blur | pad
+#   audio: true          # Originalton der Rohclips übernehmen
+#   original_gain: 0.25
+
+# music:
+#   file: /srv/media/video-cut/music/theme.mp3   # Ziel für -m auto
+
+# style:
+#   preset: cinematic    # natural | original | cinematic
+
+# nextcloud:
+#   enabled: true
+#   scan_cmd: 'docker exec nextcloud php /var/www/html/occ files:scan <user> --path="/Reels"'
+
+# spotify:
+#   enabled: false
+#   track_file: /srv/media/video-cut/music/track.mp3
