@@ -495,5 +495,8 @@ def iter_media_files(
         name = path.name
         if name.startswith(".") or name.endswith((".part", ".tmp", ".crdownload", "~")):
             continue
+        # Temp-Suffix mitten im Dateinamen (z. B. video.part.mp4, .crdownload.mp4)
+        if any(part in {"part", "tmp", "crdownload"} for part in name.split(".")[:-1]):
+            continue
         found.append(path)
     return sorted(found, key=lambda p: p.name.lower())
