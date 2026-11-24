@@ -62,6 +62,15 @@ class SpotifyAccessError(RuntimeError):
     """
 
 
+class SpotifyTimeoutError(TimeoutError):
+    """Spotify-API-Anfrage ist abgelaufen (Timeout).
+
+    Wird von :func:`_auth_get` geworfen, wenn eine Netzwerkanfrage an Spotify
+    länger als das konfigurierte Timeout dauert. Der Aufrufer kann dann auf
+    lokale Beat-Erkennung (librosa) ausweichen.
+    """
+
+
 class _TokenCache:
     """Thread-sicherer OAuth-Token-Cache.
 
@@ -184,6 +193,9 @@ def _auth_get(url: str, *, quota_locked: bool = False) -> Any | None:
         while True:
             try:
                 response = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=20)
+            except requests.exceptions.Timeout as exc:
+                log.warning("Spotify-Anfrage Timeout: %s", exc)
+                raise SpotifyTimeoutError(str(exc)) from exc
             except Exception as exc:
                 log.warning("Spotify-Anfrage fehlgeschlagen: %s", exc)
                 return None
@@ -262,11 +274,30 @@ def _evict_stale(directory: Path, ttl: float) -> int:
     return evicted
 
 
+def _librosa_beats(track_file: str | os.PathLike[str]) -> list[float] | None:
+    """Lokale Beat-Erkennung mit librosa als Fallback bei Spotify-Timeout."""
+    try:
+        import librosa
+    except ImportError:
+        log.warning("librosa fehlt - lokale Beat-Fallback nicht verfügbar")
+        return None
+
+    try:
+        y, sr = librosa.load(str(track_file))
+        _tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
+        beat_times = librosa.frames_to_time(beats, sr=sr)
+        return sorted(float(b) for b in beat_times)
+    except Exception as exc:  # librosa-Fehler, Datei nicht lesbar, etc.
+        log.warning("Lokale librosa-Beat-Erkennung fehlgeschlagen: %s", exc)
+        return None
+
+
 def fetch_spotify_beats(
     track_uri: str,
     *,
     cache_dir: str | os.PathLike[str] | None = None,
     ttl: float | None = None,
+    track_file: str | os.PathLike[str] | None = None,
 ) -> list[float] | None:
     """Beat-Startzeiten in Sekunden aus Spotify Audio Analysis."""
     track_id = extract_track_id(track_uri)
@@ -373,6 +404,11 @@ def fetch_spotify_beats(
         return result
     except SpotifyAccessError:
         raise
+    except SpotifyTimeoutError:
+        log.warning("Spotify-Anfrage Timeout - Fallback auf lokale librosa-Beats")
+        if track_file is not None:
+            return _librosa_beats(track_file)
+        return None
     except Exception as exc:
         log.warning("Fehler beim Abruf der Spotify-Beats: %s", exc)
         return None

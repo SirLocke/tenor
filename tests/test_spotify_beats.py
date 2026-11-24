@@ -8,8 +8,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from src.spotify_beats import (
     SpotifyAccessError,
+    SpotifyTimeoutError,
     _auth_get,
     _cache,
+    _librosa_beats,
     _TokenCache,
     extract_track_id,
     fetch_spotify_beats,
