@@ -11,7 +11,6 @@ from src.spotify_beats import (
     SpotifyTimeoutError,
     _auth_get,
     _cache,
-    _librosa_beats,
     _TokenCache,
     extract_track_id,
     fetch_spotify_beats,
