@@ -472,3 +472,26 @@ class TestFetchSpotifyBeats:
                 assert "nicht schreibbar" in caplog.text
         finally:
             os.chmod(cache_dir, 0o755)
+
+    def test_fetch_spotify_beats_timeout_falls_back_to_librosa(
+        self, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        """Bei Spotify-Timeout wird auf lokale librosa-Beats zurückgefallen."""
+        track_file = tmp_path_factory.mktemp("audio") / "track.mp3"
+        track_file.touch()
+
+        with (
+            patch("src.spotify_beats._auth_get", side_effect=SpotifyTimeoutError("timeout")),
+            patch("src.spotify_beats._librosa_beats", return_value=[0.5, 1.0, 1.5]) as mock_librosa,
+        ):
+            beats = fetch_spotify_beats(
+                "4uLU612A35POGL3A3X3iie",
+                track_file=track_file,
+            )
+            assert beats == [0.5, 1.0, 1.5]
+            mock_librosa.assert_called_once_with(track_file)
+
+    def test_fetch_spotify_beats_timeout_without_track_file_returns_none(self) -> None:
+        """Bei Spotify-Timeout ohne track_file wird None zurückgegeben."""
+        with patch("src.spotify_beats._auth_get", side_effect=SpotifyTimeoutError("timeout")):
+            assert fetch_spotify_beats("4uLU612A35POGL3A3X3iie") is None
