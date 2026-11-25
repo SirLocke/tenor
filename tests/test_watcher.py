@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -786,3 +787,31 @@ def test_full_render_queue_drops_event_without_crash(tmp_path, caplog):
     assert "Warteschlange voll (Max 1)" in caplog.text
     assert f2 not in p._pending
     assert p._queue.qsize() == 1
+
+
+def test_stale_pending_entries_pruned_on_new_event(tmp_path):
+    """Regression: verwaiste Debounce-Einträge dürfen bei langen Läufen nicht leaken."""
+    from src.watcher import IngestProcessor
+
+    cfg = {"ingest_dir": str(tmp_path), "watcher": {"debounce_seconds": 5}}
+    p = IngestProcessor(cfg)
+
+    stale = tmp_path / "stale.mp4"
+    stale.touch()
+    fresh = tmp_path / "fresh.mp4"
+    fresh.touch()
+
+    # Simuliere einen Eintrag, dessen Sammel-Thread längst abgebrochen ist.
+    p._pending.add(stale)
+    p._pending_since[stale] = time.monotonic() - 3600
+
+    with patch("threading.Thread") as mock_thread:
+        mock_thread_instance = MagicMock()
+        mock_thread.return_value = mock_thread_instance
+        p.on_file_event(fresh)
+
+        assert stale not in p._pending
+        assert stale not in p._pending_since
+        assert fresh in p._pending
+        assert fresh in p._pending_since
+        mock_thread_instance.start.assert_called_once()

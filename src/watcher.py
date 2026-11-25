@@ -312,6 +312,9 @@ class IngestProcessor:
         state_dir = self.output_dir.parent if self.output_dir.name else self.output_dir
         self.state = WatcherState.load(state_dir / STATE_FILENAME)
         self._pending: set[Path] = set()
+        # Erfassungszeit je _pending-Eintrag, damit verwaiste Debounce-
+        # Einträge bei langen Läufen nicht im Speicher bleiben.
+        self._pending_since: dict[Path, float] = {}
         self._inflight: set[Path] = set()
         # Bounded Queue für die _pending/_inflight-Einträge. `put_nowait`
         # wirft queue.Full, sobald max_queue_size erreicht ist - dieser Fall
@@ -359,8 +362,29 @@ class IngestProcessor:
         for item in remaining:
             self._queue.put_nowait(item)
 
+    def _prune_stale_pending(self, max_age: float | None = None) -> None:
+        """Entfernt Debounce-Einträge, die älter als die Debounce-Frist sind.
+
+        Muss unter ``self._lock`` aufgerufen werden. Ohne diese Bereinigung
+        blieben Pfade bei langen Läufen im Speicher, wenn ihr Sammel-Thread
+        abgebrochen wurde (Shutdown oder Exception).
+        """
+        if not self._pending_since:
+            return
+        window = self.debounce if max_age is None else max_age
+        cutoff = time.monotonic() - window
+        stale = [p for p, ts in self._pending_since.items() if ts <= cutoff]
+        for path in stale:
+            self._pending.discard(path)
+            self._pending_since.pop(path, None)
+            self._dequeue(path)
+        if stale:
+            log.info("%d verwaiste Debounce-Eintrag(e) entfernt", len(stale))
+
     def on_file_event(self, path: Path) -> None:
         """Wird vom Handler bei create/move/modify aufgerufen."""
+        with self._lock:
+            self._prune_stale_pending()
         path = path.resolve()
         if not is_media(path, self.extensions):
             return
@@ -400,8 +424,10 @@ class IngestProcessor:
                         path.name,
                     )
                     return
+                now = time.monotonic()
                 self._pending.add(path)
-                self._last_added = time.monotonic()
+                self._pending_since[path] = now
+                self._last_added = now
             log.info("Neue Eingang erkannt: %s", path.name)
             threading.Thread(target=self._settle_and_collect, args=(path,), daemon=True).start()
 
@@ -419,6 +445,7 @@ class IngestProcessor:
             log.warning("Datei unvollständig oder entfernt, wird übersprungen: %s", path.name)
             with self._lock:
                 self._pending.discard(path)
+                self._pending_since.pop(path, None)
                 self._dequeue(path)
             return
 
@@ -431,6 +458,7 @@ class IngestProcessor:
             with self._lock:
                 batch = sorted(self._pending)
                 self._pending.clear()
+                self._pending_since.clear()
                 self._inflight.update(batch)
                 self._last_added = 0.0
         if batch:
